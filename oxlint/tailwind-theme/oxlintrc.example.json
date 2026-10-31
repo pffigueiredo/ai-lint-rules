@@ -1,0 +1,38 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": ["eslint-plugin-better-tailwindcss"],
+  "settings": {
+    "better-tailwindcss": { "entryPoint": "src/styles/app.css", "rootFontSize": 16 }
+  },
+  "rules": {
+    "better-tailwindcss/enforce-canonical-classes": "error",
+    "better-tailwindcss/no-unnecessary-whitespace": "error",
+    "better-tailwindcss/no-restricted-classes": [
+      "error",
+      {
+        "restrict": [
+          {
+            "pattern": "^(.*:)?text-\\[(\\d|clamp)",
+            "message": "Use a text size from the @theme scale in src/styles/app.css."
+          },
+          {
+            "pattern": "^(.*:)?(tracking|leading)-\\[",
+            "message": "Use a tracking or leading token from the @theme scale in src/styles/app.css."
+          },
+          {
+            "pattern": "^(.*:)?shadow-\\[",
+            "message": "Use a named shadow token from @theme (for example shadow-pin, shadow-chrome, shadow-pop)."
+          },
+          {
+            "pattern": "^(.*:)?rounded(-[a-z]+)?-\\[",
+            "message": "Use a named radius token from @theme (for example rounded-sm, rounded-md, rounded-lg, rounded-full)."
+          },
+          {
+            "pattern": "^(.*:)?-?(gap(-[xy])?|p[xytblrse]?|m[xytblrse]?|space-[xy]|inset(-[xy])?|top|right|bottom|left|w|h|size|min-w|min-h|max-w|max-h|basis|translate-[xy])-\\d+\\.(25|75)$",
+            "message": "Spacing sits on a 2px grid: use whole or .5 steps."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["**/*.gen.ts", "**/*.gen.tsx"],
+  "jsPlugins": ["./oxlint/react-bans/plugin.js"],
+  "rules": {
+    "ai/no-use-state": "error",
+    "ai/no-use-effect": "error",
+    "ai/no-manual-memoization": "error",
+    "ai/no-banned-react-reexport": "error",
+    "ai/no-overzealous-destructuring": "error"
+  },
+  "overrides": [
+    {
+      "files": ["src/lib/use-*.ts", "src/lib/use-*.tsx"],
+      "rules": {
+        "ai/no-use-state": "off",
+        "ai/no-use-effect": "off"
+      }
+    }
+  ]
+}
