@@ -16,6 +16,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 - `oxlint/architecture` — import bans that keep layers pointing one way and server data in `src/lib`
 - `konsistent/konsistent.json` — [konsistent](https://www.npmjs.com/package/konsistent) convention that every page route sets its meta
 - `oxlint/stack` — all the Oxlint configs above in one `.oxlintrc.json`
+- `oracles` — runnable property and oracle tests with [fast-check](https://fast-check.dev), and how to write them
 
 Needs `oxlint` and `@oxlint/plugins` at matching versions. The copies here were taken from `1.83.0`. Floating promises also need `oxlint-tsgolint`.
 
@@ -143,6 +144,34 @@ Also stop exporting the client and its error helper from the `lib/` module that 
 **3. Route files stay thin.** A route file validates params and search, loads data, sets `head`, and renders one component, with no markup and no data calls. Pattern 2 already bans data calls in routes. `konsistent/konsistent.json` adds the convention that every page route exports `Route` and calls `pageMeta`, the helper that builds the page's title and description. Rename `pageMeta` to your helper, and replace the two exclusions with your layout routes and any page that inherits the root title. Add it with `pnpm add -D konsistent` and run it after Oxlint: `"lint": "oxlint . && konsistent"`. It exits 1 on a violation.
 
 "No markup in route files" has no reliable rule, so it stays review.
+
+## Oracle tests
+
+A lint rule checks how code is written. An oracle test checks what it does, across hundreds of inputs you didn't pick. The idea comes from [TanStack DB 1.0 RC1: Going All In on Oracles](https://tanstack.com/blog/tanstack-db-1.0-rc1-going-all-in-on-oracles). TanStack also publishes the skills it uses to write and review them: [oracle-authoring](https://www.skills.sh/tanstack/db/oracle-authoring) and [oracle-review](https://www.skills.sh/tanstack/db/oracle-review).
+
+Each test has three parts:
+
+1. **A generator.** fast-check invents inputs, such as 30 random pins around Madrid at zoom 12.
+2. **The real code** runs on each input.
+3. **A checker you write** decides whether the output is acceptable. It is either a **rule** that every correct answer shares ("no two shown names overlap"), or an **oracle**: a deliberately simple, slow version that computes the expected answer, which the real code must match.
+
+When a check fails, fast-check shrinks the input to the smallest one that still fails, such as two pins at the same spot, and prints it.
+
+The examples in `oracles/` come from a map app:
+
+- **`clusters.test.ts` (oracle).** The real code clusters places with Supercluster. The oracle is the input list itself: every place is on the map exactly once, as a pin or counted inside a cluster. Above `MAX_CLUSTER_ZOOM` all of them are pins, and the open place gets one pin whether or not it is in the list.
+- **`labels.test.ts` (rules).** When two names collide, either one may show, so there's no single answer for an oracle to compute. The test checks what every correct answer shares: shown names don't overlap, the open pin keeps its name, and a name is hidden only when it would overlap a shown one.
+
+How to write one:
+
+1. **State the rule in one sentence** a user would recognise.
+2. **Compute it independently.** Don't import helpers or constants from the code under test. A bug in a shared helper, or a changed constant, passes on both sides. `labels.test.ts` keeps its own map projection and its own 96×16 label box for this reason.
+3. **If you can list every input, loop over all of them** instead of generating. In the app these came from, the filters had 96 combinations and the map 17 zoom levels, so one loop covered everything. Use the generator for inputs you can't list, such as positions and names.
+4. **Break the code on purpose** and check that the test fails for the reason you expect. A test that can't fail checks nothing. In that app, the oracle tests caught 4 of 4 planted bugs; the existing example tests caught 1.
+
+They fit logic with a rule you can state: "never overlap", "exactly once", "same answer as the simple version". They don't help with how a screen looks, and a plain example test is still the quickest way to document one specific case.
+
+`pnpm test` runs the oracle tests with the lint-rule tests. `pnpm typecheck` checks the examples against `tsconfig/strict.json`. In your project, `pnpm add -D fast-check`.
 
 ## Tailwind theme lock
 

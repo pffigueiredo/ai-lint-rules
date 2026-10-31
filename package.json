@@ -2,14 +2,18 @@
   "name": "ai-lint-rules",
   "private": true,
   "type": "module",
-  "description": "Copy-paste Oxlint rules for React Compiler apps, typed boundaries, and token-locked Tailwind themes.",
+  "description": "Copy-paste Oxlint rules, strict TypeScript, and oracle tests for React Compiler apps.",
   "scripts": {
-    "test": "vitest run --config oxlint/react-bans/vitest.config.ts"
+    "test": "vitest run --config oxlint/react-bans/vitest.config.ts && vitest run --config oracles/vitest.config.ts",
+    "typecheck": "tsc -p oracles"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.83.0",
     "eslint-plugin-better-tailwindcss": "4.7.0",
+    "fast-check": "^4.10.2",
     "oxlint": "1.83.0",
+    "supercluster": "^9.1.0",
+    "typescript": "^7.0.2",
     "vitest": "3.2.4"
   },
   "packageManager": "pnpm@10.34.4"

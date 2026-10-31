@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig/strict.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": [],
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["*.ts"],
+  "exclude": ["vitest.config.ts"]
+}
