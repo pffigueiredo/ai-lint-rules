@@ -8,7 +8,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 
 ## Layout
 
-- `oxlint/react-bans` — five Oxlint JS-plugin rules, with tests
+- `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: five hook bans and three state rules
 - `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `console`, floating promises
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
 - `oxlint/tailwind-theme` — `eslint-plugin-better-tailwindcss` config that canonicalizes classes and bans one-off tokens
@@ -37,6 +37,26 @@ Oxlint loads JavaScript plugins through `jsPlugins`. Drop `oxlint/react-bans` in
 | `ai/no-overzealous-destructuring` | Destructuring a field used fewer than three times |
 
 Shareable UI state goes in the URL. Derived state comes from queries or mutations. Effects and subscriptions live behind audited `src/lib/use-*.ts` hooks. The example config turns the state and effect rules off for that glob.
+
+## State rules
+
+For wherever `useState` is allowed: a project without `ai/no-use-state`, or the `src/lib/use-*` hooks that are exempt from it. They ban the three shapes unnecessary state usually takes. A lint rule can't judge what state means, only how it's written, so each rule targets one shape that is almost always the wrong version.
+
+| Rule | Blocks | Fix |
+| --- | --- | --- |
+| `ai/no-async-state` | A state setter called in an `async` function, in `.then` / `.catch` / `.finally`, or in a query's `onSuccess` / `onError` / `onSettled` | Read `status`, `data` and `error` from `useQuery` / `useMutation`. `status` is already `'idle' \| 'pending' \| 'success' \| 'error'`. |
+| `ai/max-one-boolean-state` | A second boolean `useState` in the same component or hook | One union: `useState<'idle' \| 'editing' \| 'confirming'>('idle')`. Two booleans allow four combinations, a union only the ones you name. |
+| `ai/no-state-copies` | `useState(props.venue)`, and `setSelected(v)` where `v` is an item from `.map` / `.find` / `.forEach` | Read the prop directly, or name it `initial…` / `default…` if it's a starting draft. Store the item's key and look it up during render. |
+
+Controlled forms pass all three: `useState({ email: '', terms: false, newsletter: false })` is a draft the component owns, and it is one state, not two booleans.
+
+`no-state-copies` treats a list item as an object only when the callback reads a property off it (`v.name`), so `days.map((d) => setDay(d))` passes. It also misses a copy made through an intermediate variable (`const v = venues.find(...)`, then `setSelected(v)`).
+
+These overlap with existing rules, deliberately:
+
+- [`shelf/prefer-swr-mutation`](https://www.pkgstats.com/pkg:@shelf/eslint-config) flags loading flags around remote calls, for SWR. `no-async-state` flags any setter after a promise, for TanStack Query.
+- [react-doctor](https://github.com/millionco/react-doctor)'s `prefer-useReducer` warns at five `useState` calls. `max-one-boolean-state` errors at the second boolean.
+- react-doctor's `no-derived-useState` flags props in `useState` too, but also flags `initialValue` drafts and suggests syncing the copy in an effect. `no-state-copies` exempts `initial*` / `default*` and adds the list-item case.
 
 ## TypeScript and console
 
