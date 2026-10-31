@@ -1,0 +1,74 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["**/*.gen.ts", "**/*.gen.tsx"],
+  "options": { "typeAware": true },
+  "plugins": ["react", "typescript", "unicorn", "oxc"],
+  "jsPlugins": [
+    "./oxlint/react-bans/plugin.js",
+    "eslint-plugin-better-tailwindcss",
+    "eslint-plugin-react-you-might-not-need-an-effect"
+  ],
+  "settings": {
+    "better-tailwindcss": { "entryPoint": "src/styles/app.css", "rootFontSize": 16 }
+  },
+  "rules": {
+    "no-console": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }],
+    "typescript/no-floating-promises": "error",
+    "typescript/no-base-to-string": "off",
+    "typescript/unbound-method": "off",
+    "react/set-state-in-effect": "error",
+    "react-you-might-not-need-an-effect/no-derived-state": "error",
+    "ai/no-use-state": "error",
+    "ai/no-use-effect": "error",
+    "ai/no-manual-memoization": "error",
+    "ai/no-banned-react-reexport": "error",
+    "ai/no-overzealous-destructuring": "error",
+    "better-tailwindcss/enforce-canonical-classes": "error",
+    "better-tailwindcss/no-unnecessary-whitespace": "error",
+    "better-tailwindcss/no-restricted-classes": [
+      "error",
+      {
+        "restrict": [
+          {
+            "pattern": "^(.*:)?text-\\[(\\d|clamp)",
+            "message": "Use a text size from the @theme scale in src/styles/app.css."
+          },
+          {
+            "pattern": "^(.*:)?(tracking|leading)-\\[",
+            "message": "Use a tracking or leading token from the @theme scale in src/styles/app.css."
+          },
+          {
+            "pattern": "^(.*:)?shadow-\\[",
+            "message": "Use a named shadow token from @theme (for example shadow-pin, shadow-chrome, shadow-pop)."
+          },
+          {
+            "pattern": "^(.*:)?rounded(-[a-z]+)?-\\[",
+            "message": "Use a named radius token from @theme (for example rounded-sm, rounded-md, rounded-lg, rounded-full)."
+          },
+          {
+            "pattern": "^(.*:)?-?(gap(-[xy])?|p[xytblrse]?|m[xytblrse]?|space-[xy]|inset(-[xy])?|top|right|bottom|left|w|h|size|min-w|min-h|max-w|max-h|basis|translate-[xy])-\\d+\\.(25|75)$",
+            "message": "Spacing sits on a 2px grid: use whole or .5 steps."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/lib/use-*.ts", "src/lib/use-*.tsx"],
+      "rules": {
+        "ai/no-use-state": "off",
+        "ai/no-use-effect": "off"
+      }
+    },
+    {
+      "files": ["tools/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ]
+}

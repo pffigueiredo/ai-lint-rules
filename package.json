@@ -2,7 +2,7 @@
   "name": "ai-lint-rules",
   "private": true,
   "type": "module",
-  "description": "Copy-paste Oxlint rules for React Compiler apps and token-locked Tailwind themes.",
+  "description": "Copy-paste Oxlint rules for React Compiler apps, typed boundaries, and token-locked Tailwind themes.",
   "scripts": {
     "test": "vitest run --config oxlint/react-bans/vitest.config.ts"
   },

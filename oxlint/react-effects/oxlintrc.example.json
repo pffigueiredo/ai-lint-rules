@@ -1,0 +1,9 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react"],
+  "jsPlugins": ["eslint-plugin-react-you-might-not-need-an-effect"],
+  "rules": {
+    "react/set-state-in-effect": "error",
+    "react-you-might-not-need-an-effect/no-derived-state": "error"
+  }
+}
