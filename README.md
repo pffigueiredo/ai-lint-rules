@@ -9,7 +9,8 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 ## Layout
 
 - `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: five hook bans and three state rules
-- `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `console`, floating promises
+- `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `!` assertions, `console`, floating promises
+- `tsconfig/strict.json` — the strict compiler flags that pair with those rules
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
 - `oxlint/tailwind-theme` — `eslint-plugin-better-tailwindcss` config that canonicalizes classes and bans one-off tokens
 - `oxlint/stack` — all of the above in one `.oxlintrc.json`
@@ -70,6 +71,7 @@ Built-in Oxlint rules. `no-floating-promises` needs `options.typeAware: true` an
 | `typescript/no-explicit-any` | `any` |
 | `typescript/ban-ts-comment` | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck` |
 | `typescript/consistent-type-assertions` `{ assertionStyle: "never" }` | `as Type`. Use a type predicate, `zod`, or `satisfies` at the boundary. `as const` is still allowed. |
+| `typescript/no-non-null-assertion` | `x!`. With `as` banned, `!` is the last cheap way to silence a type error. No exceptions, tests and scripts included. |
 | `typescript/no-floating-promises` | A Promise that is not `await`ed, `return`ed, `.catch`ed, or `void`ed. Intentional fire-and-forget (TanStack `navigate()` in a click handler) is `void navigate(...)`. |
 
 Type-aware mode also turns on the rest of tsgolint correctness. This stack leaves two of those off because they were noise on a React Compiler app of object methods and `FormData` values:
@@ -80,6 +82,37 @@ Type-aware mode also turns on the rest of tsgolint correctness. This stack leave
 Do not copy a giant “every tsgolint rule off” list. Opt in `no-floating-promises`. Leave the rest of the pack at default unless a rule is actually noisy.
 
 Listing `plugins` replaces Oxlint’s defaults. Keep `"typescript"`, `"unicorn"`, and `"oxc"` next to `"react"`.
+
+## Strict tsconfig
+
+`tsconfig/strict.json` is `strict` plus every compiler flag that rejects a shortcut. Copy its `compilerOptions` into your tsconfig, or `extends` it.
+
+| Flag | Rejects |
+| --- | --- |
+| `noUncheckedIndexedAccess` | Reading `arr[i]` or `record[key]` as if it always exists. The result is `T \| undefined`. |
+| `exactOptionalPropertyTypes` | Passing `undefined` to an optional `prop?: T`. Write `prop?: T \| undefined` when you mean it. |
+| `noPropertyAccessFromIndexSignature` | `record.key` on an index signature. Write `record['key']`, or declare the key. |
+| `noImplicitOverride` | Overriding a class method without `override` |
+| `noImplicitReturns` | A function where some paths return a value and others fall off the end |
+| `noFallthroughCasesInSwitch` | A non-empty `case` that falls into the next one |
+| `noUnusedLocals`, `noUnusedParameters` | Dead variables and parameters |
+| `allowUnreachableCode: false`, `allowUnusedLabels: false` | Unreachable code and unused labels, as errors instead of warnings |
+
+`noUncheckedIndexedAccess` only works together with `typescript/no-non-null-assertion`. Without the ban, an agent satisfies the flag by writing `arr[0]!`, and the codebase ends up with the same assumption plus a `!`. Replace each `!` with something the compiler can check:
+
+- **Count-then-read:** `(counts[key] ??= { n: 0 }).n++` instead of initialising and then reading `counts[key]!`.
+- **Parallel arrays:** a `Record<Day, string>` keyed by the value instead of `NAMES[i]!`.
+- **Unknown data:** narrow with `in` (`'name' in data && typeof data.name === 'string'`) instead of reading fields off `Record<string, unknown>`.
+- **Real invariants:** `if (!x) throw new Error('…')` with a message that says what was expected. In tests, the same throw with the fixture you expected.
+
+`noPropertyAccessFromIndexSignature` also rejects `import.meta.env.API_URL` until you declare the variable. Declaring it removes the `any` as well:
+
+```ts
+// src/env.d.ts
+interface ImportMetaEnv {
+  readonly API_URL: string
+}
+```
 
 ## React effects
 
