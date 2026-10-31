@@ -9,7 +9,7 @@
     "ai/no-banned-react-reexport": "error",
     "ai/no-overzealous-destructuring": "error",
     "ai/no-async-state": "error",
-    "ai/max-one-boolean-state": "error",
+    "ai/no-boolean-state": "error",
     "ai/no-state-copies": "error"
   },
   "overrides": [

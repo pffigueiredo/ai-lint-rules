@@ -13,7 +13,7 @@ tester.run('no-state-copies', plugin.rules['no-state-copies'], {
   valid: [
     `import { useState } from "react";
      function SignUp() {
-       const [form, setForm] = useState({ email: "", terms: false, newsletter: false });
+       const [form, setForm] = useState({ email: "", name: "" });
        return <input value={form.email} onChange={(e) => setForm({ ...form, email: e.currentTarget.value })} />;
      }`,
     `import { useState } from "react";

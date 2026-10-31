@@ -45,17 +45,19 @@ For wherever `useState` is allowed: a project without `ai/no-use-state`, or the 
 | Rule | Blocks | Fix |
 | --- | --- | --- |
 | `ai/no-async-state` | A state setter called in an `async` function, in `.then` / `.catch` / `.finally`, or in a query's `onSuccess` / `onError` / `onSettled` | Read `status`, `data` and `error` from `useQuery` / `useMutation`. `status` is already `'idle' \| 'pending' \| 'success' \| 'error'`. |
-| `ai/max-one-boolean-state` | A second boolean `useState` in the same component or hook | One union: `useState<'idle' \| 'editing' \| 'confirming'>('idle')`. Two booleans allow four combinations, a union only the ones you name. |
+| `ai/no-boolean-state` | Any boolean in `useState`: `false`, `!x`, `Boolean(x)`, `x > 0`, `<boolean>`, and boolean fields of an object (`useState({ editing: false })`) | Let the browser own open/closed (`<details>`, `popover`, `<dialog>`), the form own checkboxes (read `FormData` on submit), and TanStack Query own async status. Name anything else as a union: `useState<'view' \| 'editing'>('view')`. |
 | `ai/no-state-copies` | `useState(props.venue)`, and `setSelected(v)` where `v` is an item from `.map` / `.find` / `.forEach` | Read the prop directly, or name it `initial…` / `default…` if it's a starting draft. Store the item's key and look it up during render. |
 
-Controlled forms pass all three: `useState({ email: '', terms: false, newsletter: false })` is a draft the component owns, and it is one state, not two booleans.
+Whether two booleans depend on each other isn't visible in syntax or in types, so no rule can detect it without guessing. `no-boolean-state` doesn't try. It removes boolean flags from component state, so contradictory flags can't exist. It doesn't catch two related unions (`'view' | 'editing'` next to `'idle' | 'confirming'`); that's left to review. Only `ai/no-use-state` rules out every combination, by allowing no local state.
+
+A controlled text form passes all three rules: `useState({ email: '', name: '' })` is a draft the component owns. Checkbox fields are booleans, so a form with checkboxes is uncontrolled (read with `FormData`) or goes through a form library. `no-boolean-state` doesn't follow type references either, so `useState<Flags>(initialFlags)` passes when both are declared elsewhere.
 
 `no-state-copies` treats a list item as an object only when the callback reads a property off it (`v.name`), so `days.map((d) => setDay(d))` passes. It also misses a copy made through an intermediate variable (`const v = venues.find(...)`, then `setSelected(v)`).
 
 These overlap with existing rules, deliberately:
 
 - [`shelf/prefer-swr-mutation`](https://www.pkgstats.com/pkg:@shelf/eslint-config) flags loading flags around remote calls, for SWR. `no-async-state` flags any setter after a promise, for TanStack Query.
-- [react-doctor](https://github.com/millionco/react-doctor)'s `prefer-useReducer` warns at five `useState` calls. `max-one-boolean-state` errors at the second boolean.
+- [react-doctor](https://github.com/millionco/react-doctor)'s `prefer-useReducer` warns at five `useState` calls. `no-boolean-state` bans boolean state outright, because counting can't tell related flags from independent ones.
 - react-doctor's `no-derived-useState` flags props in `useState` too, but also flags `initialValue` drafts and suggests syncing the copy in an effect. `no-state-copies` exempts `initial*` / `default*` and adds the list-item case.
 
 ## TypeScript and console
