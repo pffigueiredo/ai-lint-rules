@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/konsistent/konsistent.schema.json",
+  "version": "v1",
+  "conventions": [
+    {
+      "name": "pages-set-their-meta",
+      "description": "Every page route exports Route and sets its title and description with pageMeta in head. _atlas.tsx is a layout, and the home page keeps the root's default title.",
+      "paths": "src/routes/*.tsx",
+      "excludeFiles": ["src/routes/_atlas.tsx", "src/routes/_atlas.index.tsx"],
+      "must": {
+        "exportConstants": ["Route"],
+        "callFunction": ["pageMeta"]
+      }
+    }
+  ]
+}

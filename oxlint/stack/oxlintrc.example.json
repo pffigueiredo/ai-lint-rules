@@ -73,6 +73,61 @@
       "rules": {
         "no-console": "off"
       }
+    },
+    {
+      "files": ["src/components/**", "src/routes/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@tanstack/react-query",
+                "importNames": ["useQuery", "useQueries", "useInfiniteQuery", "useSuspenseQuery", "useMutation", "useQueryClient"],
+                "message": "Server data lives in src/lib. Call a hook from there, or add one."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@neondatabase/**"],
+                "message": "The backend client lives in src/lib. Call a hook from there."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/lib/**", "src/stores/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/components/**", "**/routes/**"],
+                "message": "src/lib and src/stores sit below the UI. Move the shared piece down instead of importing up."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/data/**", "src/db/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/lib/**", "**/stores/**", "**/components/**", "**/routes/**"],
+                "message": "src/data and src/db are the bottom layer. They import nothing from the layers above."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

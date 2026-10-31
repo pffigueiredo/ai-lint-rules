@@ -13,7 +13,9 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 - `tsconfig/strict.json` — the strict compiler flags that pair with those rules
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
 - `oxlint/tailwind-theme` — `eslint-plugin-better-tailwindcss` config that canonicalizes classes and bans one-off tokens
-- `oxlint/stack` — all of the above in one `.oxlintrc.json`
+- `oxlint/architecture` — import bans that keep layers pointing one way and server data in `src/lib`
+- `konsistent/konsistent.json` — [konsistent](https://www.npmjs.com/package/konsistent) convention that every page route sets its meta
+- `oxlint/stack` — all the Oxlint configs above in one `.oxlintrc.json`
 
 Needs `oxlint` and `@oxlint/plugins` at matching versions. The copies here were taken from `1.83.0`. Floating promises also need `oxlint-tsgolint`.
 
@@ -124,6 +126,23 @@ interface ImportMetaEnv {
 | `react-you-might-not-need-an-effect/no-derived-state` | Copying props or other state into state through an effect. Compute it during render. |
 
 Together with `ai/no-use-effect`, feature UI cannot grow an effect at all. These two still audit the `src/lib/use-*` allowlist.
+
+## Architecture
+
+Three file-level patterns for a TanStack Start app. Each one is checked by a tool, not just written down.
+
+**1. Dependencies point one way: `routes` → `components` → `lib` / `stores` → `data` / `db`.** Nothing lower down imports anything higher up, so `lib/` and `data/` stay testable without React or the router. `oxlint/architecture` bans upward imports per folder with `no-restricted-imports`.
+
+**2. Server data lives in `src/lib`.** Only `lib/` touches the backend client or TanStack Query. Components and routes call named hooks such as `useSave()` or `useSetPassword(email)`, so query keys, cache invalidation and error handling stay in one place. The config bans two things in `src/components` and `src/routes`:
+
+- **The query hooks by name**, not the whole package. `router.tsx` creates the `QueryClient` and `__root.tsx` renders `QueryClientProvider`, and both stay allowed.
+- **The backend client package.** The example uses `@neondatabase/**`; swap in yours. Use `**`: in Oxlint, `@neondatabase/neon-js/*` does not match the subpath `@neondatabase/neon-js/auth/react/adapters`, but `@neondatabase/**` matches the package and every subpath.
+
+Also stop exporting the client and its error helper from the `lib/` module that owns them. TypeScript then blocks the import as well as the lint rule.
+
+**3. Route files stay thin.** A route file validates params and search, loads data, sets `head`, and renders one component, with no markup and no data calls. Pattern 2 already bans data calls in routes. `konsistent/konsistent.json` adds the convention that every page route exports `Route` and calls `pageMeta`, the helper that builds the page's title and description. Rename `pageMeta` to your helper, and replace the two exclusions with your layout routes and any page that inherits the root title. Add it with `pnpm add -D konsistent` and run it after Oxlint: `"lint": "oxlint . && konsistent"`. It exits 1 on a violation.
+
+"No markup in route files" has no reliable rule, so it stays review.
 
 ## Tailwind theme lock
 
