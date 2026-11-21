@@ -71,7 +71,7 @@ After merges that skipped this skill, use `/maintain-formal-verification-skill`.
 
 ## Coverage
 
-The sync commit is `401c512a430f62bc50cc7420a19ccab753061798`. Move this hash only after you confirm the verification still describes the files below.
+The sync commit is `2ac5c93fb1299594723029d2ce6acd403a0d2c6e`. Move this hash only after you confirm the verification still describes the files below.
 
 Covered implementation:
 
