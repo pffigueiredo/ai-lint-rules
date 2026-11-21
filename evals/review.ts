@@ -1,5 +1,6 @@
-import { access, appendFile, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, appendFile, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import {
   type Kind,
@@ -51,6 +52,33 @@ export type BenefitRow = {
   why: string
   input: string | null
 }
+
+export type CostVerdict = 'better' | 'same' | 'worse' | 'bug'
+
+export type OverlayRule = { rule: string; message: string }
+
+export type CostFinding = {
+  rule: string
+  file: string
+  start: number
+  end: number
+  excerpt: string
+  verdict: CostVerdict
+  why: string
+  input: string | null
+}
+
+export type CostRow = {
+  kind: 'cost'
+  id: string
+  problem: string
+  arm: 'lint'
+  rep: number
+  checkpoint: number
+  findings: CostFinding[]
+}
+
+export type ReviewRow = BenefitRow | CostRow
 
 type SrcFile = { path: string; content: string }
 
@@ -309,6 +337,19 @@ export function benefitKey(row: Pick<BenefitRow, 'id' | 'checkpoint' | 'file' | 
   return `benefit\t${row.id}\t${row.checkpoint}\t${row.file}\t${row.start}\t${row.end}\t${row.rule}`
 }
 
+export function costKey(row: Pick<CostRow, 'id' | 'checkpoint'>): string {
+  return `cost\t${row.id}\t${row.checkpoint}`
+}
+
+export function normalizeRule(id: string): string {
+  const t = id.trim()
+  const paren = /^([A-Za-z0-9-]+)\((.+)\)$/.exec(t)
+  if (paren?.[1] !== undefined && paren[2] !== undefined) return `${paren[1]}(${paren[2]})`
+  const slash = t.indexOf('/')
+  if (slash > 0) return `${t.slice(0, slash)}(${t.slice(slash + 1)})`
+  return `eslint(${t})`
+}
+
 function parseBenefitRow(raw: unknown): BenefitRow {
   if (!isRecord(raw) || raw['kind'] !== 'benefit') throw new Error('review.jsonl: expected benefit row')
   const { id, problem, arm, rep, checkpoint, rule, message, file, start, end, excerpt, verdict, why } = raw
@@ -331,6 +372,186 @@ function parseBenefitRow(raw: unknown): BenefitRow {
     throw new Error('review.jsonl benefit row: input must be string or null')
   }
   return { kind: 'benefit', id, problem, arm, rep, checkpoint, rule, message, file, start, end, excerpt, verdict, why, input }
+}
+
+function parseCostFinding(raw: unknown, at: string): Omit<CostFinding, 'excerpt'> {
+  if (!isRecord(raw)) throw new Error(`${at}: finding must be an object`)
+  const { rule, file, start, end, verdict, why } = raw
+  if (typeof rule !== 'string' || typeof file !== 'string' || typeof why !== 'string') {
+    throw new Error(`${at}: missing strings`)
+  }
+  if (typeof start !== 'number' || typeof end !== 'number' || !Number.isInteger(start) || !Number.isInteger(end)) {
+    throw new Error(`${at}: bad span`)
+  }
+  if (verdict !== 'better' && verdict !== 'same' && verdict !== 'worse' && verdict !== 'bug') {
+    throw new Error(`${at}: bad verdict ${String(verdict)}`)
+  }
+  const inputRaw = raw['input']
+  let input: string | null = null
+  if (typeof inputRaw === 'string' && inputRaw.trim() !== '') input = inputRaw.trim()
+  if (typeof inputRaw !== 'string' && inputRaw !== null && inputRaw !== undefined) {
+    throw new Error(`${at}: input must be string or null`)
+  }
+  if (verdict === 'bug' && input === null) throw new Error(`${at}: bug verdict requires input`)
+  return { rule: normalizeRule(rule), file: file.replaceAll('\\', '/').replace(/^\.\//, ''), start, end, verdict, why: why.trim(), input }
+}
+
+function parseCostRow(raw: unknown): CostRow {
+  if (!isRecord(raw) || raw['kind'] !== 'cost') throw new Error('review.jsonl: expected cost row')
+  const { id, problem, arm, rep, checkpoint, findings } = raw
+  if (typeof id !== 'string' || typeof problem !== 'string') throw new Error('review.jsonl cost row missing strings')
+  if (arm !== 'lint') throw new Error('review.jsonl cost row: arm must be lint')
+  if (typeof rep !== 'number' || typeof checkpoint !== 'number') throw new Error('review.jsonl cost row missing numbers')
+  if (!Array.isArray(findings)) throw new Error('review.jsonl cost row missing findings')
+  return {
+    kind: 'cost',
+    id,
+    problem,
+    arm,
+    rep,
+    checkpoint,
+    findings: findings.map((f, i) => {
+      const parsed = parseCostFinding(f, `findings[${i}]`)
+      if (!isRecord(f) || typeof f['excerpt'] !== 'string') throw new Error(`findings[${i}]: missing excerpt`)
+      return { ...parsed, excerpt: f['excerpt'] }
+    }),
+  }
+}
+
+function parseReviewRow(raw: unknown): ReviewRow {
+  if (!isRecord(raw)) throw new Error('review.jsonl row must be an object')
+  if (raw['kind'] === 'benefit') return parseBenefitRow(raw)
+  if (raw['kind'] === 'cost') return parseCostRow(raw)
+  throw new Error(`review.jsonl: unknown kind ${String(raw['kind'])}`)
+}
+
+function optionMessages(v: unknown): string[] {
+  const out: string[] = []
+  const walk = (x: unknown): void => {
+    if (Array.isArray(x)) {
+      for (const item of x) walk(item)
+      return
+    }
+    if (!isRecord(x)) return
+    if (typeof x['message'] === 'string') out.push(x['message'])
+    for (const [k, val] of Object.entries(x)) {
+      if (k === 'message') continue
+      walk(val)
+    }
+  }
+  walk(v)
+  return out
+}
+
+function ruleDetail(option: unknown): string {
+  const msgs = optionMessages(option)
+  if (msgs.length > 0) return msgs.join(' ')
+  if (option === undefined) return ''
+  return JSON.stringify(option)
+}
+
+function collectEnabledRules(rules: unknown, dest: OverlayRule[]): void {
+  if (!isRecord(rules)) return
+  for (const [id, v] of Object.entries(rules)) {
+    if (id.startsWith('better-tailwindcss/')) continue
+    if (v === 'off' || v === 0) continue
+    if (v === 'error' || v === 2 || v === 'warn' || v === 1) {
+      dest.push({ rule: normalizeRule(id), message: '' })
+      continue
+    }
+    if (Array.isArray(v) && (v[0] === 'error' || v[0] === 2 || v[0] === 'warn' || v[0] === 1)) {
+      dest.push({ rule: normalizeRule(id), message: v.length > 1 ? ruleDetail(v[1]) : '' })
+    }
+  }
+}
+
+function mergeOverlay(rows: OverlayRule[]): OverlayRule[] {
+  const by = new Map<string, string[]>()
+  for (const r of rows) {
+    const list = by.get(r.rule) ?? []
+    if (r.message !== '' && !list.includes(r.message)) list.push(r.message)
+    by.set(r.rule, list)
+  }
+  return [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([rule, msgs]) => ({ rule, message: msgs.join(' ') }))
+}
+
+function overlayFromConfig(cfg: Record<string, unknown>): OverlayRule[] {
+  const dest: OverlayRule[] = []
+  collectEnabledRules(cfg['rules'], dest)
+  const overrides = cfg['overrides']
+  if (Array.isArray(overrides)) {
+    for (const o of overrides) {
+      if (!isRecord(o)) continue
+      const files = o['files']
+      if (
+        Array.isArray(files) &&
+        files.length > 0 &&
+        files.every(f => typeof f === 'string' && f.startsWith('tools/'))
+      ) {
+        continue
+      }
+      collectEnabledRules(o['rules'], dest)
+    }
+  }
+  return mergeOverlay(dest)
+}
+
+function messagesOfRule(v: unknown): string[] {
+  if (!isRecord(v) || !isRecord(v['meta'])) return []
+  const out: string[] = []
+  const docs = v['meta']['docs']
+  if (isRecord(docs) && typeof docs['description'] === 'string') out.push(docs['description'])
+  const messages = v['meta']['messages']
+  if (isRecord(messages)) {
+    for (const m of Object.values(messages)) {
+      if (typeof m === 'string' && m.trim() !== '') out.push(m)
+    }
+  }
+  return out
+}
+
+async function reactBanMessages(): Promise<Map<string, string[]>> {
+  const dir = join(REPO_ROOT, 'oxlint/react-bans')
+  const pluginSrc = await readFile(join(dir, 'plugin.js'), 'utf8')
+  const names = new Set<string>()
+  for (const m of pluginSrc.matchAll(/'([a-z0-9-]+)':/g)) {
+    if (m[1] !== undefined) names.add(m[1])
+  }
+  const out = new Map<string, string[]>()
+  const files = await readdir(dir)
+  for (const f of files) {
+    if (!f.endsWith('.js') || f === 'plugin.js') continue
+    const base = f.slice(0, -3)
+    if (!names.has(base)) continue
+    const mod: unknown = await import(pathToFileURL(join(dir, f)).href)
+    if (!isRecord(mod)) continue
+    const msgs: string[] = []
+    for (const v of Object.values(mod)) msgs.push(...messagesOfRule(v))
+    if (msgs.length > 0) out.set(`ai(${base})`, msgs)
+  }
+  return out
+}
+
+export async function overlayRules(kindId: string): Promise<OverlayRule[]> {
+  const examplePath =
+    kindId === 'react'
+      ? join(REPO_ROOT, 'oxlint/stack/oxlintrc.example.json')
+      : join(REPO_ROOT, 'oxlint/typescript/oxlintrc.example.json')
+  const cfg = await readJson(examplePath)
+  if (!isRecord(cfg)) throw new Error(`${examplePath} must be an object`)
+  const rules = overlayFromConfig(cfg)
+  if (kindId !== 'react') return rules
+  const plugin = await reactBanMessages()
+  return rules.map(r => {
+    const extra = plugin.get(r.rule)
+    if (extra === undefined) return r
+    const message = [r.message, ...extra].filter(m => m !== '').join(' ')
+    return { rule: r.rule, message }
+  })
+}
+
+function formatOverlay(rules: OverlayRule[]): string {
+  return rules.map(r => (r.message === '' ? `- ${r.rule}` : `- ${r.rule}: ${r.message}`)).join('\n')
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -357,6 +578,56 @@ export function parseBenefitAnswer(text: string): { verdict: BenefitVerdict; why
   if (typeof inputRaw === 'string' && inputRaw.trim() !== '') input = inputRaw.trim()
   if (verdict === 'bug' && input === null) throw new Error('benefit: bug verdict requires input')
   return { verdict, why: why.trim(), input }
+}
+
+export function parseCostAnswer(text: string, files: Map<string, string>): CostFinding[] {
+  const raw = parseJsonObject(text)
+  const findings = raw['findings']
+  if (!Array.isArray(findings)) throw new Error('cost: missing findings array')
+  const out: CostFinding[] = []
+  for (let i = 0; i < findings.length; i += 1) {
+    const parsed = parseCostFinding(findings[i], `findings[${i}]`)
+    const src = files.get(parsed.file)
+    if (src === undefined) throw new Error(`cost: unknown file ${parsed.file}`)
+    const n = lineCount(src)
+    if (parsed.start < 1 || parsed.end < parsed.start || parsed.end > n) {
+      throw new Error(`cost: ${parsed.file} span ${parsed.start}-${parsed.end} out of range`)
+    }
+    out.push({ ...parsed, excerpt: excerptOf(src, parsed.start, parsed.end) })
+  }
+  return out
+}
+
+export function costPrompt(specs: string[], files: SrcFile[], rules: OverlayRule[]): string {
+  return `You are reviewing a small program written while the following lint rules were in force. Find code that exists to satisfy one of those rules rather than because the spec needs it.
+
+Typical substitutions:
+- type guards and rebuilt objects instead of \`as\`
+- \`?? default\` or explicit checks instead of \`!\`
+- process.stdout.write wrappers instead of console
+- src/lib/use-* hooks or URL/query state instead of useState/useEffect
+
+Rules in force:
+${formatOverlay(rules)}
+
+For each such piece of code, name the rule it satisfies, the file and line span, and a verdict against the banned construct it replaces:
+- better: clearer or smaller than the banned construct
+- same: equivalent
+- worse: worse in clarity or size
+- bug: it introduced a defect. Name an input the spec allows that fails, so a person can run it (CLI argv after src/cli.ts, or the user action in a UI).
+
+Reply with JSON only:
+{"findings":[{"rule":"eslint(no-console)","file":"src/cli.ts","start":1,"end":8,"verdict":"worse","why":"one sentence"}]}
+
+If you find none, reply {"findings":[]}.
+For bug, include "input". For the others, omit input.
+
+<spec>
+${formatSpecs(specs)}
+</spec>
+
+${formatFiles(files)}
+`
 }
 
 export function benefitPrompt(specs: string[], files: SrcFile[], hit: LintHit, src: string): string {
@@ -402,11 +673,12 @@ function assertBlind(text: string, label: string): void {
   if (/\b(cursor-grok|gpt-5|claude-|gemini-)/i.test(text)) throw new Error(`${label} leaks a model id`)
 }
 
-async function collectPlainHits(
+async function collectSnapshot(
   runDir: string,
   ws: WorkspaceRow,
   requested: number | undefined,
-): Promise<{ checkpoint: number; specs: string[]; files: SrcFile[]; hits: LintHit[] } | undefined> {
+  needHits: boolean,
+): Promise<{ checkpoint: number; specs: string[]; files: SrcFile[]; hits: LintHit[]; kindId: string } | undefined> {
   const problem = await loadProblem(ws.problem)
   const kind = getKind(problem.kind)
   const clone = await mkdtemp(join(tmpdir(), 'rev-'))
@@ -416,25 +688,30 @@ async function collectPlainHits(
     const checkpoint = requested ?? tags[tags.length - 1]
     if (checkpoint === undefined || !tags.includes(checkpoint)) return undefined
     await checkoutTag(clone, checkpoint)
-    await kind.prepareGrade(clone)
+    if (needHits) await kind.prepareGrade(clone)
     const files = await collectSrc(clone, kind)
-    const fileMap = new Map(files.map(f => [f.path, f.content]))
-    const srcDir = join(clone, 'src')
     const specs = problem.specs.slice(0, checkpoint)
-    if (files.length === 0) return { checkpoint, specs, files, hits: [] }
+    if (!needHits || files.length === 0) {
+      return { checkpoint, specs, files, hits: [], kindId: problem.kind }
+    }
+    const fileMap = new Map(files.map(f => [f.path, f.content]))
     const cfg = await kind.yardstickOxlint()
     const cfgPath = join(clone, '.metrics-oxlintrc.json')
     await writeJson(cfgPath, cfg)
-    const ran = await capture(OXLINT, ['--format', 'json', '-c', cfgPath, srcDir], { cwd: clone, timeoutMs: 60_000 })
+    const ran = await capture(OXLINT, ['--format', 'json', '-c', cfgPath, join(clone, 'src')], {
+      cwd: clone,
+      timeoutMs: 60_000,
+    })
     await rm(cfgPath, { force: true })
     const hits = parseLintHits(ran.stdout, clone, fileMap)
-    return { checkpoint, specs, files, hits }
+    return { checkpoint, specs, files, hits, kindId: problem.kind }
   } finally {
     await rm(clone, { recursive: true, force: true })
   }
 }
 
 type BenefitJob = {
+  kind: 'benefit'
   ws: WorkspaceRow
   checkpoint: number
   hit: LintHit
@@ -443,69 +720,118 @@ type BenefitJob = {
   src: string
 }
 
+type CostJob = {
+  kind: 'cost'
+  ws: WorkspaceRow
+  checkpoint: number
+  files: SrcFile[]
+  specs: string[]
+  rules: OverlayRule[]
+}
+
+type Job = BenefitJob | CostJob
+
 export async function runReview(opts: ReviewOpts): Promise<void> {
   const manifest: Manifest = parseManifest(await readJson(join(opts.runDir, 'manifest.json')))
   if (opts.fresh) {
     await archiveIfPresent(join(opts.runDir, 'review.jsonl'), join(opts.runDir, 'review.v1.jsonl'))
     await archiveIfPresent(join(opts.runDir, 'review.md'), join(opts.runDir, 'review.v1.md'))
   }
-  const existing = await readJsonl(join(opts.runDir, 'review.jsonl'), raw => {
-    if (!isRecord(raw)) throw new Error('review.jsonl row must be an object')
-    if (raw['kind'] === 'benefit') return parseBenefitRow(raw)
-    throw new Error(`review.jsonl: unknown kind ${String(raw['kind'])}`)
-  })
-  const done = new Set(existing.filter((r): r is BenefitRow => r.kind === 'benefit').map(benefitKey))
-  const jobs: BenefitJob[] = []
+  const existing = await readJsonl(join(opts.runDir, 'review.jsonl'), parseReviewRow)
+  const doneBenefit = new Set(existing.filter((r): r is BenefitRow => r.kind === 'benefit').map(benefitKey))
+  const doneCost = new Set(existing.filter((r): r is CostRow => r.kind === 'cost').map(costKey))
+  const rulesCache = new Map<string, OverlayRule[]>()
+  const overlayFor = async (kindId: string): Promise<OverlayRule[]> => {
+    const cached = rulesCache.get(kindId)
+    if (cached !== undefined) return cached
+    const rules = await overlayRules(kindId)
+    rulesCache.set(kindId, rules)
+    return rules
+  }
+  const jobs: Job[] = []
   for (const ws of manifest.workspaces) {
-    if (ws.arm !== 'plain') continue
     process.stderr.write(`review collect ${ws.id}\n`)
-    const snap = await collectPlainHits(opts.runDir, ws, opts.checkpoint)
+    const snap = await collectSnapshot(opts.runDir, ws, opts.checkpoint, ws.arm === 'plain')
     if (snap === undefined) continue
-    const fileMap = new Map(snap.files.map(f => [f.path, f.content]))
-    for (const hit of snap.hits) {
-      const src = fileMap.get(hit.file)
-      if (src === undefined) continue
-      const key = benefitKey({
-        id: ws.id,
-        checkpoint: snap.checkpoint,
-        file: hit.file,
-        start: hit.start,
-        end: hit.end,
-        rule: hit.rule,
-      })
-      if (done.has(key)) continue
-      jobs.push({ ws, checkpoint: snap.checkpoint, hit, files: snap.files, specs: snap.specs, src })
+    if (ws.arm === 'plain') {
+      const fileMap = new Map(snap.files.map(f => [f.path, f.content]))
+      for (const hit of snap.hits) {
+        const src = fileMap.get(hit.file)
+        if (src === undefined) continue
+        const key = benefitKey({
+          id: ws.id,
+          checkpoint: snap.checkpoint,
+          file: hit.file,
+          start: hit.start,
+          end: hit.end,
+          rule: hit.rule,
+        })
+        if (doneBenefit.has(key)) continue
+        jobs.push({ kind: 'benefit', ws, checkpoint: snap.checkpoint, hit, files: snap.files, specs: snap.specs, src })
+      }
+      continue
     }
+    if (doneCost.has(costKey({ id: ws.id, checkpoint: snap.checkpoint }))) continue
+    jobs.push({
+      kind: 'cost',
+      ws,
+      checkpoint: snap.checkpoint,
+      files: snap.files,
+      specs: snap.specs,
+      rules: await overlayFor(snap.kindId),
+    })
   }
   const append = mutex()
   await pool(jobs, opts.concurrency, async job => {
-    process.stderr.write(`review benefit ${job.ws.id} ${job.hit.rule} ${job.hit.file}:${job.hit.start}\n`)
-    const prompt = benefitPrompt(job.specs, job.files, job.hit, job.src)
-    assertBlind(prompt, 'benefit prompt')
+    if (job.kind === 'benefit') {
+      process.stderr.write(`review benefit ${job.ws.id} ${job.hit.rule} ${job.hit.file}:${job.hit.start}\n`)
+      const prompt = benefitPrompt(job.specs, job.files, job.hit, job.src)
+      assertBlind(prompt, 'benefit prompt')
+      const answer = await askReviewer(prompt, opts.model)
+      const parsed = parseBenefitAnswer(answer)
+      const row: BenefitRow = {
+        kind: 'benefit',
+        id: job.ws.id,
+        problem: job.ws.problem,
+        arm: 'plain',
+        rep: job.ws.rep,
+        checkpoint: job.checkpoint,
+        rule: job.hit.rule,
+        message: job.hit.message,
+        file: job.hit.file,
+        start: job.hit.start,
+        end: job.hit.end,
+        excerpt: excerptOf(job.src, job.hit.start, job.hit.end),
+        verdict: parsed.verdict,
+        why: parsed.why,
+        input: parsed.input,
+      }
+      await append(async () => {
+        await appendFile(join(opts.runDir, 'review.jsonl'), `${JSON.stringify(row)}\n`)
+      })
+      return
+    }
+    process.stderr.write(`review cost ${job.ws.id}\n`)
+    const prompt = costPrompt(job.specs, job.files, job.rules)
+    assertBlind(prompt, 'cost prompt')
     const answer = await askReviewer(prompt, opts.model)
-    const parsed = parseBenefitAnswer(answer)
-    const row: BenefitRow = {
-      kind: 'benefit',
+    const findings = parseCostAnswer(answer, new Map(job.files.map(f => [f.path, f.content])))
+    const row: CostRow = {
+      kind: 'cost',
       id: job.ws.id,
       problem: job.ws.problem,
-      arm: 'plain',
+      arm: 'lint',
       rep: job.ws.rep,
       checkpoint: job.checkpoint,
-      rule: job.hit.rule,
-      message: job.hit.message,
-      file: job.hit.file,
-      start: job.hit.start,
-      end: job.hit.end,
-      excerpt: excerptOf(job.src, job.hit.start, job.hit.end),
-      verdict: parsed.verdict,
-      why: parsed.why,
-      input: parsed.input,
+      findings,
     }
     await append(async () => {
       await appendFile(join(opts.runDir, 'review.jsonl'), `${JSON.stringify(row)}\n`)
     })
   })
-  process.stderr.write(`review benefit done (${jobs.length} new, ${done.size} kept)\n`)
+  const newBenefit = jobs.filter(j => j.kind === 'benefit').length
+  const newCost = jobs.filter(j => j.kind === 'cost').length
+  process.stderr.write(`review done (${newBenefit} benefit, ${newCost} cost new)\n`)
 }
 
 function sampleHitJson(): string {
@@ -586,6 +912,57 @@ export async function selfCheckReview(): Promise<void> {
   }
   if (!prompt.includes('eslint(no-console)')) throw new Error('benefit prompt missing rule')
   if (prompt.includes(EVALS_DIR) || prompt.includes(METRICS_PLUGIN)) throw new Error('benefit prompt leaks repo paths')
+
+  const srcFiles: SrcFile[] = [{ path: 'src/cli.ts', content: src }]
+  const fileMap = new Map([['src/cli.ts', src]])
+  const empty = parseCostAnswer('{"findings":[]}', fileMap)
+  if (empty.length !== 0) throw new Error('parseCostAnswer: empty')
+  const cost = parseCostAnswer(
+    '{"findings":[{"rule":"no-console","file":"src/cli.ts","start":2,"end":2,"verdict":"same","why":"stdout.write is console."}]}',
+    fileMap,
+  )
+  if (cost.length !== 1 || cost[0]?.rule !== 'eslint(no-console)' || cost[0].verdict !== 'same') {
+    throw new Error('parseCostAnswer: normalize no-console')
+  }
+  threw = false
+  try {
+    parseCostAnswer('{"findings":[{"rule":"x","file":"src/cli.ts","start":2,"end":2,"verdict":"bug","why":"x"}]}', fileMap)
+  } catch {
+    threw = true
+  }
+  if (!threw) throw new Error('parseCostAnswer: bug without input should fail')
+
+  const cliRules = await overlayRules('cli')
+  const cliIds = new Set(cliRules.map(r => r.rule))
+  for (const id of ['eslint(no-console)', 'typescript(no-non-null-assertion)', 'typescript(consistent-type-assertions)']) {
+    if (!cliIds.has(id)) throw new Error(`overlayRules cli missing ${id}`)
+  }
+  const assertion = cliRules.find(r => r.rule === 'typescript(consistent-type-assertions)')
+  if (assertion === undefined || !assertion.message.includes('assertionStyle')) {
+    throw new Error('overlayRules: consistent-type-assertions should keep assertionStyle')
+  }
+  const reactRules = await overlayRules('react')
+  const useState = reactRules.find(r => r.rule === 'ai(no-use-state)')
+  if (useState === undefined || !useState.message.includes('Do not use React')) {
+    throw new Error('overlayRules react missing ai(no-use-state) message')
+  }
+  const restricted = reactRules.find(r => r.rule === 'eslint(no-restricted-imports)')
+  if (restricted === undefined || !restricted.message.includes('Server data lives in src/lib')) {
+    throw new Error('overlayRules react missing no-restricted-imports messages')
+  }
+  if (reactRules.some(r => r.rule.startsWith('better-tailwindcss'))) {
+    throw new Error('overlayRules react should drop tailwind')
+  }
+
+  const cPrompt = costPrompt(['Print a total.'], srcFiles, cliRules)
+  assertBlind(cPrompt, 'cost self-check prompt')
+  if (!cPrompt.includes('eslint(no-console)')) throw new Error('cost prompt missing overlay rules')
+  if (!cPrompt.includes('process.stdout.write')) throw new Error('cost prompt missing substitutions')
+  if (cPrompt.includes(EVALS_DIR) || cPrompt.includes(METRICS_PLUGIN)) throw new Error('cost prompt leaks repo paths')
+
+  if (normalizeRule('typescript/no-non-null-assertion') !== 'typescript(no-non-null-assertion)') {
+    throw new Error('normalizeRule slash')
+  }
 
   const dir = await mkdtemp(join(tmpdir(), 'rev-fresh-'))
   try {
