@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { finished } from 'node:stream/promises'
@@ -145,10 +145,12 @@ async function runAgent(
   model: string,
   logPath: string,
   timeoutMs: number,
-): Promise<void> {
+): Promise<'ok' | 'timeout' | 'error'> {
   await mkdir(dirname(logPath), { recursive: true })
   const out = createWriteStream(logPath)
-  await new Promise<void>((resolve, reject) => {
+  let timedOut = false
+  let spawnErr: string | undefined
+  await new Promise<void>(resolve => {
     const proc = spawn(
       'cursor-agent',
       ['-p', '--force', '--trust', '--output-format', 'stream-json', '--model', model, '--workspace', ws, prompt],
@@ -157,11 +159,13 @@ async function runAgent(
     proc.stdout.pipe(out, { end: false })
     proc.stderr.resume()
     const timer = setTimeout(() => {
+      timedOut = true
       proc.kill('SIGKILL')
     }, timeoutMs)
     proc.on('error', err => {
+      spawnErr = err instanceof Error ? err.message : String(err)
       clearTimeout(timer)
-      reject(err)
+      resolve()
     })
     proc.on('close', () => {
       clearTimeout(timer)
@@ -169,7 +173,22 @@ async function runAgent(
     })
   })
   out.end()
-  await finished(out)
+  await finished(out).catch(() => undefined)
+  if (timedOut) {
+    await appendFile(
+      logPath,
+      `${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, timed_out: true })}\n`,
+    )
+    return 'timeout'
+  }
+  if (spawnErr !== undefined) {
+    await appendFile(
+      logPath,
+      `${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, error: spawnErr })}\n`,
+    )
+    return 'error'
+  }
+  return 'ok'
 }
 
 async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -229,11 +248,8 @@ async function runJob(runDir: string, model: string, timeoutMs: number, job: Job
     await assertBlind(ws, prompt)
     const logPath = join(runDir, job.row.id, `agent-${n}.jsonl`)
     process.stderr.write(`${job.row.id} checkpoint ${n}\n`)
-    try {
-      await runAgent(ws, prompt, model, logPath, timeoutMs)
-    } catch (err) {
-      process.stderr.write(`${job.row.id} agent error: ${err instanceof Error ? err.message : String(err)}\n`)
-    }
+    const status = await runAgent(ws, prompt, model, logPath, timeoutMs)
+    if (status !== 'ok') process.stderr.write(`${job.row.id} agent ${status}\n`)
     await git(ws, ['add', '-A'])
     await git(ws, ['commit', '--allow-empty', '-m', `v${n}`])
     await git(ws, ['tag', '-f', `v${n}`])

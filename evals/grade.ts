@@ -33,6 +33,8 @@ const BIN = {
 
 type CaseResult = { name: string; group: Group; pass: boolean; detail: string }
 
+type AgentStatus = 'ok' | 'timeout' | 'error' | 'missing'
+
 type AgentStats = {
   durationMs: number
   inputTokens: number
@@ -42,7 +44,7 @@ type AgentStats = {
   reasoningTokens: number
   toolCalls: number
   ranCheck: boolean
-  isError: boolean
+  status: AgentStatus
 }
 
 type Quality = {
@@ -56,6 +58,7 @@ type Quality = {
   lintByRule: Record<string, number>
   tscErrors: number
   suppressions: number
+  ccErosion: number
   erosion: number
 }
 
@@ -84,6 +87,7 @@ type Row = {
   lintByRule: Record<string, number>
   tscErrors: number
   suppressions: number
+  ccErosion: number
   erosion: number
   durationMs: number
   inputTokens: number
@@ -91,7 +95,7 @@ type Row = {
   tokens: number
   toolCalls: number
   ranCheck: boolean
-  agentError: boolean
+  agentStatus: AgentStatus
 }
 
 function trimLines(s: string): string {
@@ -373,6 +377,7 @@ async function qualityOf(ws: string): Promise<Quality> {
     lintByRule: lint.lintByRule,
     tscErrors,
     suppressions,
+    ccErosion: fnTerm,
     erosion: fnTerm + locTerm,
   }
 }
@@ -386,6 +391,8 @@ function parseAgentLog(text: string): AgentStats {
   let cacheReadTokens = 0
   let cacheWriteTokens = 0
   let reasoningTokens = 0
+  let hasResult = false
+  let timedOut = false
   let isError = false
   for (const line of text.split('\n')) {
     if (line.includes('pnpm check') || line.includes('pnpm run check')) ranCheck = true
@@ -399,6 +406,8 @@ function parseAgentLog(text: string): AgentStats {
     if (!isRecord(ev)) continue
     if (ev['type'] === 'tool_call' && ev['subtype'] === 'started') toolCalls += 1
     if (ev['type'] !== 'result') continue
+    hasResult = true
+    timedOut = ev['timed_out'] === true
     isError = ev['is_error'] === true || ev['subtype'] === 'error'
     if (typeof ev['duration_ms'] === 'number') durationMs = ev['duration_ms']
     const usage = ev['usage']
@@ -409,6 +418,7 @@ function parseAgentLog(text: string): AgentStats {
     if (typeof usage['cacheWriteTokens'] === 'number') cacheWriteTokens = usage['cacheWriteTokens']
     if (typeof usage['reasoningTokens'] === 'number') reasoningTokens = usage['reasoningTokens']
   }
+  const status: AgentStatus = timedOut ? 'timeout' : !hasResult ? 'missing' : isError ? 'error' : 'ok'
   return {
     durationMs,
     inputTokens,
@@ -418,7 +428,7 @@ function parseAgentLog(text: string): AgentStats {
     reasoningTokens,
     toolCalls,
     ranCheck,
-    isError,
+    status,
   }
 }
 
@@ -596,6 +606,7 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
       lintByRule: q.lintByRule,
       tscErrors: q.tscErrors,
       suppressions: q.suppressions,
+      ccErosion: q.ccErosion,
       erosion: q.erosion,
       durationMs: agent.durationMs,
       inputTokens: agent.inputTokens,
@@ -603,7 +614,7 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
       tokens: agent.inputTokens + agent.outputTokens,
       toolCalls: agent.toolCalls,
       ranCheck: agent.ranCheck,
-      agentError: agent.isError,
+      agentStatus: agent.status,
     })
   }
   await rm(clone, { recursive: true, force: true })
@@ -628,98 +639,215 @@ function fmt(s: { mean: number; min: number; max: number }, digits = 2): string 
   return `${s.mean.toFixed(digits)} (${s.min.toFixed(digits)}-${s.max.toFixed(digits)})`
 }
 
-function workspaceSummaries(rows: Row[]): {
+type Series = { mean: number; min: number; max: number }
+
+type WsSummary = {
   solvedPct: number
   isoPct: number
   core: number
   regression: number
-  erosion: number
-  lintPerLoc: number
-  tscErrors: number
-  suppressions: number
-  finalLoc: number
+  ccErosion: number
+  loc: number
+  deltaLocPct: number
   churn: number
   durationMs: number
   tokens: number
+  lintPerLoc: number
+  tscErrors: number
+  suppressions: number
+  ranCheckPct: number
   lintByRule: Record<string, number>
-}[] {
+  lintPerLocByRule: Record<string, number>
+}
+
+function workspaceSummaries(rows: Row[]): WsSummary[] {
   const byId = new Map<string, Row[]>()
   for (const row of rows) {
     const list = byId.get(row.id) ?? []
     list.push(row)
     byId.set(row.id, list)
   }
-  const out: ReturnType<typeof workspaceSummaries> = []
+  const out: WsSummary[] = []
   for (const list of byId.values()) {
     list.sort((a, b) => a.checkpoint - b.checkpoint)
     const last = list[list.length - 1]
     if (last === undefined) continue
-    const lintPerLoc = list.map(r => (r.loc === 0 ? 0 : r.lintErrors / r.loc))
+    const loc = last.loc
+    const lintPerLocByRule: Record<string, number> = {}
+    for (const [rule, n] of Object.entries(last.lintByRule)) {
+      lintPerLocByRule[rule] = loc === 0 ? 0 : n / loc
+    }
     out.push({
       solvedPct: (100 * list.filter(r => r.solved).length) / list.length,
       isoPct: (100 * list.filter(r => r.isoSolved).length) / list.length,
       core: list.reduce((a, r) => a + r.passRate.core, 0) / list.length,
       regression: list.reduce((a, r) => a + r.passRate.regression, 0) / list.length,
-      erosion: list.reduce((a, r) => a + r.erosion, 0) / list.length,
-      lintPerLoc: lintPerLoc.reduce((a, n) => a + n, 0) / lintPerLoc.length,
-      tscErrors: last.tscErrors,
-      suppressions: last.suppressions,
-      finalLoc: last.loc,
+      ccErosion: list.reduce((a, r) => a + r.ccErosion, 0) / list.length,
+      loc,
+      deltaLocPct: list.reduce((a, r) => a + r.deltaLocPct, 0) / list.length,
       churn: list.reduce((a, r) => a + r.churn, 0) / list.length,
       durationMs: list.reduce((a, r) => a + r.durationMs, 0),
       tokens: list.reduce((a, r) => a + r.tokens, 0),
+      lintPerLoc: loc === 0 ? 0 : last.lintErrors / loc,
+      tscErrors: last.tscErrors,
+      suppressions: last.suppressions,
+      ranCheckPct: (100 * list.filter(r => r.ranCheck).length) / list.length,
       lintByRule: last.lintByRule,
+      lintPerLocByRule,
     })
   }
   return out
 }
 
-function summaryMarkdown(rows: Row[]): string {
-  const lines: string[] = ['# Summary', '']
-  for (const arm of ['plain', 'lint'] as const) {
-    const armRows = rows.filter(r => r.arm === arm)
-    lines.push(`## ${arm}`, '')
-    if (armRows.length === 0) {
-      lines.push('_no workspaces_', '')
-      continue
-    }
-    const sums = workspaceSummaries(armRows)
-    const pick = (fn: (s: (typeof sums)[number]) => number) => stats(sums.map(fn))
-    lines.push('| metric | mean (min-max) |')
-    lines.push('| --- | --- |')
-    lines.push(`| % checkpoints solved | ${fmt(pick(s => s.solvedPct))} |`)
-    lines.push(`| % iso-solved | ${fmt(pick(s => s.isoPct))} |`)
-    lines.push(`| core pass rate | ${fmt(pick(s => s.core))} |`)
-    lines.push(`| regression pass rate | ${fmt(pick(s => s.regression))} |`)
-    lines.push(`| erosion | ${fmt(pick(s => s.erosion), 3)} |`)
-    lines.push(`| lint per LOC | ${fmt(pick(s => s.lintPerLoc), 3)} |`)
-    lines.push(`| tsc strict errors | ${fmt(pick(s => s.tscErrors))} |`)
-    lines.push(`| suppressions | ${fmt(pick(s => s.suppressions))} |`)
-    lines.push(`| final LOC | ${fmt(pick(s => s.finalLoc))} |`)
-    lines.push(`| churn | ${fmt(pick(s => s.churn), 3)} |`)
-    lines.push(`| duration ms | ${fmt(pick(s => s.durationMs), 0)} |`)
-    lines.push(`| tokens | ${fmt(pick(s => s.tokens), 0)} |`)
-    lines.push('')
+function rangesOverlap(a: Series, b: Series): boolean {
+  return a.min <= b.max && b.min <= a.max
+}
+
+function pickStats<T>(xs: T[], fn: (x: T) => number): Series {
+  return stats(xs.map(fn))
+}
+
+function hhRow(name: string, plain: Series, lint: Series, digits: number): string {
+  const delta = lint.mean - plain.mean
+  const sign = delta > 0 ? '+' : ''
+  const ov = rangesOverlap(plain, lint) ? 'yes' : 'no'
+  return `| ${name} | ${fmt(plain, digits)} | ${fmt(lint, digits)} | ${sign}${delta.toFixed(digits)} | ${ov} |`
+}
+
+const HH_HEAD = [
+  '| metric | plain mean (min-max) | lint mean (min-max) | delta (lint - plain) | overlap |',
+  '| --- | --- | --- | --- | --- |',
+]
+
+function outcomeTable(plain: WsSummary[], lint: WsSummary[]): string[] {
+  const p = (fn: (s: WsSummary) => number) => pickStats(plain, fn)
+  const l = (fn: (s: WsSummary) => number) => pickStats(lint, fn)
+  return [
+    ...HH_HEAD,
+    hhRow('% checkpoints solved', p(s => s.solvedPct), l(s => s.solvedPct), 1),
+    hhRow('% iso-solved', p(s => s.isoPct), l(s => s.isoPct), 1),
+    hhRow('core pass rate', p(s => s.core), l(s => s.core), 2),
+    hhRow('regression pass rate', p(s => s.regression), l(s => s.regression), 2),
+    hhRow('complexity erosion', p(s => s.ccErosion), l(s => s.ccErosion), 3),
+    hhRow('LOC', p(s => s.loc), l(s => s.loc), 1),
+    hhRow('delta LOC %', p(s => s.deltaLocPct), l(s => s.deltaLocPct), 1),
+    hhRow('churn ratio', p(s => s.churn), l(s => s.churn), 3),
+    hhRow('tokens', p(s => s.tokens), l(s => s.tokens), 0),
+    hhRow('duration ms', p(s => s.durationMs), l(s => s.durationMs), 0),
+  ]
+}
+
+function rowAsSummary(row: Row): WsSummary {
+  const loc = row.loc
+  const lintPerLocByRule: Record<string, number> = {}
+  for (const [rule, n] of Object.entries(row.lintByRule)) {
+    lintPerLocByRule[rule] = loc === 0 ? 0 : n / loc
   }
-  const ruleNames = new Set<string>()
-  for (const row of rows) {
-    if (row.checkpoint !== Math.max(...rows.filter(r => r.id === row.id).map(r => r.checkpoint))) continue
-    for (const k of Object.keys(row.lintByRule)) ruleNames.add(k)
+  return {
+    solvedPct: row.solved ? 100 : 0,
+    isoPct: row.isoSolved ? 100 : 0,
+    core: row.passRate.core,
+    regression: row.passRate.regression,
+    ccErosion: row.ccErosion,
+    loc,
+    deltaLocPct: row.deltaLocPct,
+    churn: row.churn,
+    durationMs: row.durationMs,
+    tokens: row.tokens,
+    lintPerLoc: loc === 0 ? 0 : row.lintErrors / loc,
+    tscErrors: row.tscErrors,
+    suppressions: row.suppressions,
+    ranCheckPct: row.ranCheck ? 100 : 0,
+    lintByRule: row.lintByRule,
+    lintPerLocByRule,
   }
-  lines.push('## Lint counts by rule (final checkpoint, mean)', '')
-  lines.push('| rule | plain | lint |')
-  lines.push('| --- | --- | --- |')
-  const names = [...ruleNames].sort()
-  if (names.length === 0) lines.push('| _(none)_ | 0 | 0 |')
-  for (const rule of names) {
-    const meanArm = (arm: ArmId): string => {
-      const sums = workspaceSummaries(rows.filter(r => r.arm === arm))
-      const xs = sums.map(s => s.lintByRule[rule] ?? 0)
-      return stats(xs).mean.toFixed(2)
-    }
-    lines.push(`| ${rule} | ${meanArm('plain')} | ${meanArm('lint')} |`)
+}
+
+function complianceTable(plain: WsSummary[], lint: WsSummary[]): string[] {
+  const p = (fn: (s: WsSummary) => number) => pickStats(plain, fn)
+  const l = (fn: (s: WsSummary) => number) => pickStats(lint, fn)
+  return [
+    ...HH_HEAD,
+    hhRow('lint violations per LOC', p(s => s.lintPerLoc), l(s => s.lintPerLoc), 3),
+    hhRow('tsc strict errors', p(s => s.tscErrors), l(s => s.tscErrors), 1),
+    hhRow('suppressions', p(s => s.suppressions), l(s => s.suppressions), 1),
+    hhRow('% ran pnpm check', p(s => s.ranCheckPct), l(s => s.ranCheckPct), 1),
+  ]
+}
+
+function failedCalls(rows: Row[]): string[] {
+  const bad = rows.filter(r => r.agentStatus !== 'ok')
+  const lines = [
+    `Failed or timed-out agent calls: ${bad.length}/${rows.length}. These rows stay in the rates.`,
+    '',
+  ]
+  if (bad.length === 0) {
+    lines.push('None.', '')
+    return lines
+  }
+  for (const r of bad) {
+    lines.push(`- \`${r.id}\` checkpoint ${r.checkpoint}: ${r.agentStatus}`)
   }
   lines.push('')
+  return lines
+}
+
+function perRuleTable(plain: WsSummary[], lint: WsSummary[]): string[] {
+  const names = new Set<string>()
+  for (const s of [...plain, ...lint]) {
+    for (const k of Object.keys(s.lintPerLocByRule)) names.add(k)
+  }
+  const lines = [
+    '| rule | plain per LOC | lint per LOC | plain count | lint count |',
+    '| --- | --- | --- | --- | --- |',
+  ]
+  const sorted = [...names].sort()
+  if (sorted.length === 0) {
+    lines.push('| _(none)_ | 0 | 0 | 0 | 0 |')
+    return lines
+  }
+  for (const rule of sorted) {
+    const pLoc = stats(plain.map(s => s.lintPerLocByRule[rule] ?? 0))
+    const lLoc = stats(lint.map(s => s.lintPerLocByRule[rule] ?? 0))
+    const pN = stats(plain.map(s => s.lintByRule[rule] ?? 0))
+    const lN = stats(lint.map(s => s.lintByRule[rule] ?? 0))
+    lines.push(
+      `| ${rule} | ${pLoc.mean.toFixed(4)} | ${lLoc.mean.toFixed(4)} | ${pN.mean.toFixed(2)} | ${lN.mean.toFixed(2)} |`,
+    )
+  }
+  return lines
+}
+
+function summaryMarkdown(rows: Row[]): string {
+  const lines: string[] = [
+    '# Summary',
+    '',
+    'Question: do the TypeScript rules help, plain vs lint, in iterative runs?',
+    '',
+    'Outcome metrics can show help or harm. Compliance metrics only show whether the lint arm followed or gamed the rules. Full SlopCodeBench erosion (complexity + lint/LOC) stays in `results.jsonl` and is not an outcome.',
+    '',
+    ...failedCalls(rows),
+  ]
+  const overallPlain = workspaceSummaries(rows.filter(r => r.arm === 'plain'))
+  const overallLint = workspaceSummaries(rows.filter(r => r.arm === 'lint'))
+  lines.push('## Outcome', '')
+  lines.push(...outcomeTable(overallPlain, overallLint), '')
+  const checkpoints = [...new Set(rows.map(r => r.checkpoint))].sort((a, b) => a - b)
+  for (const n of checkpoints) {
+    const at = rows.filter(r => r.checkpoint === n)
+    lines.push(`## Outcome, checkpoint ${n}`, '')
+    lines.push(
+      ...outcomeTable(
+        at.filter(r => r.arm === 'plain').map(rowAsSummary),
+        at.filter(r => r.arm === 'lint').map(rowAsSummary),
+      ),
+      '',
+    )
+  }
+  lines.push('## Compliance', '')
+  lines.push(...complianceTable(overallPlain, overallLint), '')
+  lines.push('## Lint violations by rule (final checkpoint, per LOC)', '')
+  lines.push(...perRuleTable(overallPlain, overallLint), '')
   return `${lines.join('\n')}`
 }
 
