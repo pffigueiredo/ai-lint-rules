@@ -1,37 +1,30 @@
-import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { isDeepStrictEqual } from 'node:util'
-import { dirname, join } from 'node:path'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   type ArmId,
-  type Case,
   type Capture,
-  type Group,
+  type CaseResult,
+  type Kind,
   type Manifest,
   type Problem,
   parseManifest,
-  type Step,
   REPO_ROOT,
   capture,
+  copySolution,
   findLeak,
   isRecord,
   listProblemSlugs,
-  loadProblem,
-  materializeArm,
-  mergedStrictTsconfig,
   readJson,
   writeJson,
 } from './lib.ts'
+import { getKind, loadProblem, materializeArm } from './kinds.ts'
 
-const STEP_TIMEOUT_MS = 8_000
 const BIN = {
   oxlint: join(REPO_ROOT, 'node_modules/.bin/oxlint'),
   tsc: join(REPO_ROOT, 'node_modules/.bin/tsc'),
   git: 'git',
 }
-
-type CaseResult = { name: string; group: Group; pass: boolean; detail: string }
 
 type AgentStatus = 'ok' | 'timeout' | 'error' | 'missing'
 
@@ -98,157 +91,6 @@ type Row = {
   agentStatus: AgentStatus
 }
 
-function trimLines(s: string): string {
-  return s
-    .split('\n')
-    .map(l => l.replace(/[ \t]+$/u, ''))
-    .join('\n')
-    .replace(/\n+$/u, '')
-}
-
-function fail(detail: string): { ok: false; detail: string } {
-  return { ok: false, detail }
-}
-
-async function compareFiles(cwd: string, expected: Record<string, unknown>): Promise<{ ok: true } | { ok: false; detail: string }> {
-  for (const [rel, want] of Object.entries(expected)) {
-    const path = join(cwd, rel)
-    let body: string
-    try {
-      body = await readFile(path, 'utf8')
-    } catch {
-      return fail(`${rel}: missing`)
-    }
-    if (rel.endsWith('.json')) {
-      let got: unknown
-      try {
-        got = JSON.parse(body)
-      } catch {
-        return fail(`${rel}: not JSON`)
-      }
-      if (!isDeepStrictEqual(got, want)) return fail(`${rel}: JSON mismatch`)
-      continue
-    }
-    if (trimLines(body) !== trimLines(String(want))) return fail(`${rel}: mismatch`)
-  }
-  return { ok: true }
-}
-
-async function runStep(
-  cliDir: string,
-  cwd: string,
-  step: Step,
-): Promise<{ ok: true } | { ok: false; detail: string }> {
-  const cli = join(cliDir, 'src/cli.ts')
-  let ran: Capture
-  try {
-    const opts: { cwd: string; timeoutMs: number; stdin?: string } = {
-      cwd,
-      timeoutMs: STEP_TIMEOUT_MS,
-    }
-    if (step.stdin !== undefined) opts.stdin = step.stdin
-    ran = await capture('node', [cli, ...step.args], opts)
-  } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err))
-  }
-  if (ran.code !== step.exitCode) {
-    return fail(`exit ${ran.code}, want ${step.exitCode}`)
-  }
-  if (step.stdout !== undefined && trimLines(ran.stdout) !== trimLines(step.stdout)) {
-    return fail(`stdout mismatch`)
-  }
-  if (step.json !== undefined) {
-    let got: unknown
-    try {
-      got = JSON.parse(ran.stdout)
-    } catch {
-      return fail('stdout is not JSON')
-    }
-    if (!isDeepStrictEqual(got, step.json)) return fail('json mismatch')
-  }
-  if (step.files !== undefined) return compareFiles(cwd, step.files)
-  return { ok: true }
-}
-
-export async function runCase(cliDir: string, cas: Case): Promise<CaseResult> {
-  const cwd = await mkdtemp(join(tmpdir(), 'case-'))
-  try {
-    if (cas.files !== undefined) {
-      for (const [rel, body] of Object.entries(cas.files)) {
-        const path = join(cwd, rel)
-        await mkdir(dirname(path), { recursive: true })
-        await writeFile(path, body)
-      }
-    }
-    for (const [i, step] of cas.steps.entries()) {
-      const result = await runStep(cliDir, cwd, step)
-      if (!result.ok) {
-        return { name: cas.name, group: cas.group, pass: false, detail: `step ${i}: ${result.detail}` }
-      }
-    }
-    return { name: cas.name, group: cas.group, pass: true, detail: '' }
-  } finally {
-    await rm(cwd, { recursive: true, force: true })
-  }
-}
-
-function rate(results: CaseResult[], group: Group): number {
-  const xs = results.filter(r => r.group === group)
-  if (xs.length === 0) return 1
-  return xs.filter(r => r.pass).length / xs.length
-}
-
-async function runCheckpointCases(
-  cliDir: string,
-  problem: Problem,
-  checkpoint: number,
-): Promise<{ results: CaseResult[]; solved: boolean; isoSolved: boolean; passRate: Row['passRate'] }> {
-  const current = problem.cases[checkpoint - 1]
-  if (current === undefined) throw new Error(`missing cases for checkpoint ${checkpoint}`)
-  const iso: CaseResult[] = []
-  for (const cas of current) iso.push(await runCase(cliDir, cas))
-  const regression: CaseResult[] = []
-  for (let n = 1; n < checkpoint; n += 1) {
-    const prev = problem.cases[n - 1]
-    if (prev === undefined) continue
-    for (const cas of prev) regression.push(await runCase(cliDir, cas))
-  }
-  const all = [...iso, ...regression]
-  return {
-    results: all,
-    solved: all.every(r => r.pass),
-    isoSolved: iso.every(r => r.pass),
-    passRate: {
-      core: rate(iso, 'core'),
-      error: rate(iso, 'error'),
-      functionality: rate(iso, 'functionality'),
-      regression: regression.length === 0 ? 1 : regression.filter(r => r.pass).length / regression.length,
-    },
-  }
-}
-
-async function linkModules(ws: string): Promise<void> {
-  const dest = join(ws, 'node_modules')
-  await rm(dest, { recursive: true, force: true })
-  await symlink(join(REPO_ROOT, 'node_modules'), dest)
-}
-
-async function walkTs(dir: string): Promise<string[]> {
-  let ents
-  try {
-    ents = await readdir(dir, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const out: string[] = []
-  for (const e of ents) {
-    const p = join(dir, e.name)
-    if (e.isDirectory()) out.push(...(await walkTs(p)))
-    else if (e.name.endsWith('.ts')) out.push(p)
-  }
-  return out
-}
-
 // ponytail: line heuristic, not a parser. Ceiling: miscounts block comments, JSDoc, and // inside strings. Upgrade to a tokenizer if that skews a run.
 function countLines(src: string): { loc: number; comments: number } {
   let loc = 0
@@ -265,8 +107,11 @@ function countLines(src: string): { loc: number; comments: number } {
 const SUPPRESSION_RE = /eslint-disable|oxlint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck/g
 const CC_RE = /complexity of (\d+)/u
 
-async function srcMetrics(ws: string): Promise<{ loc: number; commentLines: number; suppressions: number; files: string[] }> {
-  const files = await walkTs(join(ws, 'src'))
+async function srcMetrics(
+  ws: string,
+  kind: Kind,
+): Promise<{ loc: number; commentLines: number; suppressions: number; files: string[] }> {
+  const files = await kind.sourceFiles(join(ws, 'src'))
   let loc = 0
   let commentLines = 0
   let suppressions = 0
@@ -318,22 +163,13 @@ function parseOxlint(stdout: string): { functions: number; ccHigh: number; ccExt
   return { functions, ccHigh, ccExtreme, ccMax, lintErrors, lintByRule }
 }
 
-async function lintMetrics(ws: string): Promise<ReturnType<typeof parseOxlint>> {
+async function lintMetrics(ws: string, kind: Kind): Promise<ReturnType<typeof parseOxlint>> {
   const srcDir = join(ws, 'src')
-  const files = await walkTs(srcDir)
+  const files = await kind.sourceFiles(srcDir)
   if (files.length === 0) {
     return { functions: 0, ccHigh: 0, ccExtreme: 0, ccMax: 0, lintErrors: 0, lintByRule: {} }
   }
-  const example = await readJson(join(REPO_ROOT, 'oxlint/typescript/oxlintrc.example.json'))
-  if (!isRecord(example)) throw new Error('oxlintrc.example.json must be an object')
-  const pluginsRaw = example['plugins']
-  const plugins = Array.isArray(pluginsRaw) ? pluginsRaw.filter(p => typeof p === 'string') : []
-  if (!plugins.includes('eslint')) plugins.push('eslint')
-  example['plugins'] = plugins
-  const rules = example['rules']
-  if (!isRecord(rules)) throw new Error('oxlintrc rules missing')
-  rules['eslint/complexity'] = ['error', { max: 0 }]
-  example['$schema'] = join(REPO_ROOT, 'node_modules/oxlint/configuration_schema.json')
+  const example = await kind.yardstickOxlint()
   const cfgPath = join(ws, '.metrics-oxlintrc.json')
   await writeJson(cfgPath, example)
   const ran = await capture(BIN.oxlint, ['--format', 'json', '-c', cfgPath, srcDir], {
@@ -344,10 +180,10 @@ async function lintMetrics(ws: string): Promise<ReturnType<typeof parseOxlint>> 
   return parseOxlint(ran.stdout)
 }
 
-async function tscErrorCount(ws: string): Promise<number> {
-  const files = await walkTs(join(ws, 'src'))
+async function tscErrorCount(ws: string, kind: Kind): Promise<number> {
+  const files = await kind.sourceFiles(join(ws, 'src'))
   if (files.length === 0) return 0
-  const cfg = await mergedStrictTsconfig()
+  const cfg = await kind.yardstickTsconfig()
   const cfgPath = join(ws, '.yardstick-tsconfig.json')
   await writeJson(cfgPath, cfg)
   const ran = await capture(BIN.tsc, ['-p', cfgPath, '--pretty', 'false'], { cwd: ws, timeoutMs: 60_000 })
@@ -360,10 +196,10 @@ async function tscErrorCount(ws: string): Promise<number> {
   return n
 }
 
-async function qualityOf(ws: string): Promise<Quality> {
-  const { loc, commentLines, suppressions } = await srcMetrics(ws)
-  const lint = await lintMetrics(ws)
-  const tscErrors = await tscErrorCount(ws)
+async function qualityOf(ws: string, kind: Kind): Promise<Quality> {
+  const { loc, commentLines, suppressions } = await srcMetrics(ws, kind)
+  const lint = await lintMetrics(ws, kind)
+  const tscErrors = await tscErrorCount(ws, kind)
   const fnTerm = lint.functions === 0 ? 0 : (lint.ccHigh + lint.ccExtreme) / lint.functions
   const locTerm = loc === 0 ? 0 : lint.lintErrors / loc
   return {
@@ -464,22 +300,31 @@ async function listCheckpointTags(ws: string): Promise<number[]> {
   return ns
 }
 
-async function copySolution(dest: string, solutionDir: string): Promise<void> {
-  await mkdir(join(dest, 'src'), { recursive: true })
-  await cp(join(solutionDir, 'src'), join(dest, 'src'), { recursive: true })
-}
-
 async function assertNoLeak(label: string, text: string): Promise<void> {
   const hit = findLeak(text)
   if (hit !== undefined) throw new Error(`${label} leaks ${JSON.stringify(hit)}`)
 }
 
+async function assertPlantedBlind(ws: string, kind: Kind): Promise<void> {
+  await assertNoLeak('lint overlay path', ws)
+  for (const rel of kind.planted) {
+    let body: string
+    try {
+      body = await readFile(join(ws, rel), 'utf8')
+    } catch {
+      continue
+    }
+    await assertNoLeak(rel, body)
+  }
+}
+
 async function selfCheckProblem(problem: Problem): Promise<void> {
+  const kind = getKind(problem.kind)
   const sol = await mkdtemp(join(tmpdir(), `${problem.slug}-sol-`))
   try {
-    await copySolution(sol, problem.solutionDir)
-    for (let n = 1; n <= problem.cases.length; n += 1) {
-      const { solved, results } = await runCheckpointCases(sol, problem, n)
+    await kind.hydrateForChecks(sol, problem.solutionDir)
+    for (let n = 1; n <= problem.specs.length; n += 1) {
+      const { solved, results } = await kind.runCheckpoint(sol, problem, n)
       if (!solved) {
         const failed = results.filter(r => !r.pass).map(r => `${r.name}: ${r.detail}`)
         throw new Error(`${problem.slug} solution failed checkpoint ${n}:\n${failed.join('\n')}`)
@@ -491,22 +336,10 @@ async function selfCheckProblem(problem: Problem): Promise<void> {
 
   const lintWs = await mkdtemp(join(tmpdir(), `${problem.slug}-lint-`))
   try {
-    await materializeArm(lintWs, 'lint')
+    await materializeArm(lintWs, 'lint', problem.kind)
     await copySolution(lintWs, problem.solutionDir)
-    await linkModules(lintWs)
-    await assertNoLeak('lint overlay path', lintWs)
-    const pkg = await readFile(join(lintWs, 'package.json'), 'utf8')
-    const rc = await readFile(join(lintWs, '.oxlintrc.json'), 'utf8')
-    const ts = await readFile(join(lintWs, 'tsconfig.json'), 'utf8')
-    const agents = await readFile(join(lintWs, 'AGENTS.md'), 'utf8')
-    for (const [label, text] of [
-      ['package.json', pkg],
-      ['.oxlintrc.json', rc],
-      ['tsconfig.json', ts],
-      ['AGENTS.md', agents],
-    ] as const) {
-      await assertNoLeak(label, text)
-    }
+    await kind.prepareTools(lintWs)
+    await assertPlantedBlind(lintWs, kind)
     const check = await capture('pnpm', ['check'], { cwd: lintWs, timeoutMs: 60_000 })
     if (check.code !== 0) {
       throw new Error(`${problem.slug} solution failed lint-arm pnpm check:\n${check.stdout}\n${check.stderr}`)
@@ -517,23 +350,13 @@ async function selfCheckProblem(problem: Problem): Promise<void> {
 
   const empty = await mkdtemp(join(tmpdir(), `${problem.slug}-empty-`))
   try {
-    await mkdir(join(empty, 'src'), { recursive: true })
-    await writeFile(join(empty, 'src/cli.ts'), 'export {}\n')
-    const failed: string[] = []
-    const passed: string[] = []
-    for (let n = 1; n <= problem.cases.length; n += 1) {
-      const bundle = problem.cases[n - 1]
-      if (bundle === undefined) continue
-      for (const cas of bundle) {
-        const r = await runCase(empty, cas)
-        if (r.pass) passed.push(`cp${n}/${cas.name}`)
-        else failed.push(cas.name)
-      }
-    }
+    await kind.hydrateEmpty(empty)
+    const { results } = await kind.runCheckpoint(empty, problem, problem.specs.length)
+    const passed = results.filter(r => r.pass).map(r => r.name)
     if (passed.length > 0) {
       throw new Error(`${problem.slug} empty program passed vacuous cases: ${passed.join(', ')}`)
     }
-    if (failed.length === 0) throw new Error(`${problem.slug} has no cases`)
+    if (results.length === 0) throw new Error(`${problem.slug} has no cases`)
   } finally {
     await rm(empty, { recursive: true, force: true })
   }
@@ -544,7 +367,7 @@ async function selfCheck(): Promise<void> {
   if (slugs.length === 0) throw new Error('no problems under evals/problems')
   for (const slug of slugs) {
     const problem = await loadProblem(slug)
-    process.stderr.write(`self-check ${slug} (${problem.cases.length} checkpoints)\n`)
+    process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
   process.stdout.write(`self-check ok: ${slugs.join(', ')}\n`)
@@ -556,19 +379,21 @@ async function loadManifest(runDir: string): Promise<Manifest> {
 
 async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]): Promise<Row[]> {
   const problem = await loadProblem(ws.problem)
+  const kind = getKind(problem.kind)
   const clone = await mkdtemp(join(tmpdir(), `${ws.problem}-g-`))
   const bundlePath = join(runDir, ws.bundle)
   const cloned = await git(process.cwd(), ['clone', bundlePath, clone])
   if (cloned.code !== 0) throw new Error(`git clone ${bundlePath}: ${cloned.stderr}`)
-  await linkModules(clone)
+  await kind.prepareTools(clone)
   const tags = await listCheckpointTags(clone)
   const rows: Row[] = []
   let prevLoc = 0
   for (const n of tags) {
     const co = await git(clone, ['checkout', '-f', `v${n}`])
     if (co.code !== 0) throw new Error(`checkout v${n}: ${co.stderr}`)
-    const cases = await runCheckpointCases(clone, problem, n)
-    const q = await qualityOf(clone)
+    await kind.prepareTools(clone)
+    const cases = await kind.runCheckpoint(clone, problem, n)
+    const q = await qualityOf(clone, kind)
     const prevRef = n === 1 ? 'v0' : `v${n - 1}`
     const diff = await numstat(clone, prevRef, `v${n}`)
     const churn = prevLoc === 0 ? 0 : (diff.added + diff.removed) / prevLoc

@@ -13,13 +13,10 @@ import {
   EVALS_DIR,
   capture,
   findLeak,
-  loadProblem,
-  materializeArm,
   parseManifest,
   writeJson,
 } from './lib.ts'
-
-const PLANTED = ['AGENTS.md', 'package.json', 'tsconfig.json', '.gitignore', '.oxlintrc.json']
+import { getKind, loadProblem, materializeArm } from './kinds.ts'
 
 type Opts = {
   problems: string[]
@@ -109,20 +106,12 @@ async function gitOut(cwd: string, args: string[]): Promise<string> {
   return ran.stdout
 }
 
-function promptFor(checkpoint: number, spec: string): string {
-  const body = spec.trim()
-  if (checkpoint === 1) {
-    return `Build this CLI in this repo. The entry point is src/cli.ts, run as node src/cli.ts <args>.\n\n${body}\n`
-  }
-  return `New requirements for the CLI in this repo (entry point src/cli.ts):\n\n${body}\n`
-}
-
-async function assertBlind(ws: string, prompt: string): Promise<void> {
+async function assertBlind(ws: string, prompt: string, planted: readonly string[]): Promise<void> {
   const promptHit = findLeak(prompt)
   if (promptHit !== undefined) throw new Error(`prompt leaks ${JSON.stringify(promptHit)}`)
   const pathHit = findLeak(ws)
   if (pathHit !== undefined) throw new Error(`workspace path leaks ${JSON.stringify(pathHit)}`)
-  for (const rel of PLANTED) {
+  for (const rel of planted) {
     let body: string
     try {
       body = await readFile(join(ws, rel), 'utf8')
@@ -203,9 +192,9 @@ async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): P
   await Promise.all(workers)
 }
 
-async function prepareWorkspace(dest: string, arm: ArmId): Promise<void> {
+async function prepareWorkspace(dest: string, arm: ArmId, kindId: string): Promise<void> {
   await rm(dest, { recursive: true, force: true })
-  await materializeArm(dest, arm)
+  await materializeArm(dest, arm, kindId)
   const install = await capture('pnpm', ['install', '--prefer-offline'], { cwd: dest, timeoutMs: 120_000 })
   if (install.code !== 0) throw new Error(`pnpm install\n${install.stderr}${install.stdout}`)
   await git(dest, ['init'])
@@ -244,8 +233,9 @@ async function runJob(runDir: string, model: string, timeoutMs: number, job: Job
     }
     const spec = job.problem.specs[n - 1]
     if (spec === undefined) throw new Error(`${job.problem.slug} missing checkpoint ${n}`)
-    const prompt = promptFor(n, spec)
-    await assertBlind(ws, prompt)
+    const kind = getKind(job.problem.kind)
+    const prompt = kind.promptFor(n, spec)
+    await assertBlind(ws, prompt, kind.planted)
     const logPath = join(runDir, job.row.id, `agent-${n}.jsonl`)
     process.stderr.write(`${job.row.id} checkpoint ${n}\n`)
     const status = await runAgent(ws, prompt, model, logPath, timeoutMs)
@@ -282,7 +272,7 @@ async function main(): Promise<void> {
         if (row === undefined) {
           const ws = join(tmpdir(), `${problem.slug}-${randomBytes(4).toString('hex')}`)
           process.stderr.write(`prepare ${id} -> ${ws}\n`)
-          await prepareWorkspace(ws, arm)
+          await prepareWorkspace(ws, arm, problem.kind)
           row = {
             id,
             problem: problem.slug,

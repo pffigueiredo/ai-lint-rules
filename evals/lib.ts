@@ -12,27 +12,37 @@ export const LEAK_RE =
 export type ArmId = 'plain' | 'lint'
 export type Group = 'core' | 'error' | 'functionality'
 
-export type Step = {
-  args: string[]
-  stdin?: string
-  exitCode: number
-  stdout?: string
-  json?: unknown
-  files?: Record<string, unknown>
-}
-
-export type Case = {
-  name: string
-  group: Group
-  files?: Record<string, string>
-  steps: Step[]
-}
-
 export type Problem = {
   slug: string
+  kind: string
   specs: string[]
-  cases: Case[][]
   solutionDir: string
+  dir: string
+}
+
+export type CaseResult = { name: string; group: Group; pass: boolean; detail: string }
+
+export type PassRate = { core: number; error: number; functionality: number; regression: number }
+
+export type CheckRun = {
+  results: CaseResult[]
+  solved: boolean
+  isoSolved: boolean
+  passRate: PassRate
+}
+
+export type Kind = {
+  templateDir: string
+  planted: readonly string[]
+  promptFor: (checkpoint: number, spec: string) => string
+  applyLintOverlay: (ws: string) => Promise<void>
+  prepareTools: (ws: string) => Promise<void>
+  hydrateForChecks: (dest: string, solutionDir: string) => Promise<void>
+  hydrateEmpty: (dest: string) => Promise<void>
+  runCheckpoint: (ws: string, problem: Problem, checkpoint: number) => Promise<CheckRun>
+  sourceFiles: (srcDir: string) => Promise<string[]>
+  yardstickOxlint: () => Promise<Record<string, unknown>>
+  yardstickTsconfig: () => Promise<Record<string, unknown>>
 }
 
 export type WorkspaceRow = {
@@ -58,7 +68,7 @@ export type Capture = {
   stderr: string
 }
 
-function isGroup(v: string): v is Group {
+export function isGroup(v: string): v is Group {
   return v === 'core' || v === 'error' || v === 'functionality'
 }
 
@@ -114,65 +124,25 @@ export function capture(
   })
 }
 
-function parseStep(raw: unknown, at: string): Step {
-  if (!isRecord(raw)) throw new Error(`${at}: step must be an object`)
-  const { args } = raw
-  if (!Array.isArray(args) || args.some(a => typeof a !== 'string')) {
-    throw new Error(`${at}: args must be a string array`)
-  }
-  const exitCode = raw['exitCode']
-  if (typeof exitCode !== 'number' || !Number.isInteger(exitCode)) {
-    throw new Error(`${at}: exitCode must be an integer`)
-  }
-  const step: Step = { args, exitCode }
-  if (raw['stdin'] !== undefined) {
-    if (typeof raw['stdin'] !== 'string') throw new Error(`${at}: stdin must be a string`)
-    step.stdin = raw['stdin']
-  }
-  if (raw['stdout'] !== undefined) {
-    if (typeof raw['stdout'] !== 'string') throw new Error(`${at}: stdout must be a string`)
-    step.stdout = raw['stdout']
-  }
-  if (raw['json'] !== undefined) step.json = raw['json']
-  if (raw['files'] !== undefined) {
-    if (!isRecord(raw['files'])) throw new Error(`${at}: files must be an object`)
-    step.files = raw['files']
-  }
-  return step
+function rate(results: CaseResult[], group: Group): number {
+  const xs = results.filter(r => r.group === group)
+  if (xs.length === 0) return 1
+  return xs.filter(r => r.pass).length / xs.length
 }
 
-function parseCase(raw: unknown, at: string): Case {
-  if (!isRecord(raw)) throw new Error(`${at}: case must be an object`)
-  const name = raw['name']
-  const group = raw['group']
-  const stepsRaw = raw['steps']
-  if (typeof name !== 'string' || name.length === 0) throw new Error(`${at}: name must be a nonempty string`)
-  if (typeof group !== 'string' || !isGroup(group)) {
-    throw new Error(`${at}: group must be core, error, or functionality`)
+export function assembleCheckRun(iso: CaseResult[], regression: CaseResult[]): CheckRun {
+  const all = [...iso, ...regression]
+  return {
+    results: all,
+    solved: all.every(r => r.pass),
+    isoSolved: iso.every(r => r.pass),
+    passRate: {
+      core: rate(iso, 'core'),
+      error: rate(iso, 'error'),
+      functionality: rate(iso, 'functionality'),
+      regression: regression.length === 0 ? 1 : regression.filter(r => r.pass).length / regression.length,
+    },
   }
-  if (!Array.isArray(stepsRaw) || stepsRaw.length === 0) throw new Error(`${at}: steps must be a nonempty array`)
-  const cas: Case = {
-    name,
-    group,
-    steps: stepsRaw.map((s, i) => parseStep(s, `${at}.steps[${i}]`)),
-  }
-  if (raw['files'] !== undefined) {
-    if (!isRecord(raw['files']) || Object.values(raw['files']).some(v => typeof v !== 'string')) {
-      throw new Error(`${at}: files must be a string map`)
-    }
-    const files: Record<string, string> = {}
-    for (const [k, v] of Object.entries(raw['files'])) {
-      if (typeof v !== 'string') throw new Error(`${at}: files.${k} must be a string`)
-      files[k] = v
-    }
-    cas.files = files
-  }
-  return cas
-}
-
-export function parseCases(raw: unknown, at: string): Case[] {
-  if (!Array.isArray(raw)) throw new Error(`${at}: expected an array of cases`)
-  return raw.map((c, i) => parseCase(c, `${at}[${i}]`))
 }
 
 export async function listProblemSlugs(): Promise<string[]> {
@@ -183,31 +153,42 @@ export async function listProblemSlugs(): Promise<string[]> {
 
 export async function loadProblem(slug: string): Promise<Problem> {
   const dir = join(EVALS_DIR, 'problems', slug)
+  let kind: string
+  try {
+    kind = (await readFile(join(dir, 'kind'), 'utf8')).trim()
+  } catch {
+    throw new Error(`${dir}: missing kind file`)
+  }
   const specs: string[] = []
-  const cases: Case[][] = []
   for (let n = 1; n <= 20; n += 1) {
     const md = join(dir, `checkpoint_${n}.md`)
-    let spec: string
     try {
-      spec = await readFile(md, 'utf8')
+      specs.push(await readFile(md, 'utf8'))
     } catch {
       break
     }
-    const jsonPath = join(dir, `checkpoint_${n}.json`)
-    const raw = await readJson(jsonPath)
-    specs.push(spec)
-    cases.push(parseCases(raw, jsonPath))
   }
   if (specs.length === 0) throw new Error(`${dir}: no checkpoints`)
-  return { slug, specs, cases, solutionDir: join(dir, 'solution') }
+  return { slug, kind, specs, solutionDir: join(dir, 'solution'), dir }
 }
 
-export async function copyTemplate(dest: string): Promise<void> {
-  await mkdir(dest, { recursive: true })
-  await cp(join(EVALS_DIR, 'template'), dest, { recursive: true })
+export async function walkSource(dir: string, exts: readonly string[]): Promise<string[]> {
+  let ents
+  try {
+    ents = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  for (const e of ents) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) out.push(...(await walkSource(p, exts)))
+    else if (exts.some(ext => e.name.endsWith(ext))) out.push(p)
+  }
+  return out
 }
 
-async function mergeCompilerOptions(tsconfigPath: string): Promise<void> {
+export async function mergeCompilerOptions(tsconfigPath: string): Promise<void> {
   const tsconfig = await readJson(tsconfigPath)
   const strict = await readJson(join(REPO_ROOT, 'tsconfig/strict.json'))
   if (!isRecord(tsconfig) || !isRecord(strict)) throw new Error('tsconfig must be an object')
@@ -218,37 +199,8 @@ async function mergeCompilerOptions(tsconfigPath: string): Promise<void> {
   await writeJson(tsconfigPath, tsconfig)
 }
 
-export async function applyLintOverlay(ws: string): Promise<void> {
-  const example = await readJson(join(REPO_ROOT, 'oxlint/typescript/oxlintrc.example.json'))
-  if (!isRecord(example)) throw new Error('oxlintrc.example.json must be an object')
-  example['$schema'] = './node_modules/oxlint/configuration_schema.json'
-  await writeJson(join(ws, '.oxlintrc.json'), example)
-  await mergeCompilerOptions(join(ws, 'tsconfig.json'))
-  const pkg = await readJson(join(ws, 'package.json'))
-  const repoPkg = await readJson(join(REPO_ROOT, 'package.json'))
-  if (!isRecord(pkg) || !isRecord(repoPkg)) throw new Error('package.json must be an object')
-  const repoDeps = repoPkg['devDependencies']
-  if (!isRecord(repoDeps)) throw new Error('repo devDependencies missing')
-  const oxlint = repoDeps['oxlint']
-  const tsgolint = repoDeps['oxlint-tsgolint']
-  if (typeof oxlint !== 'string' || typeof tsgolint !== 'string') {
-    throw new Error('pinned oxlint versions missing from the repo package.json')
-  }
-  const deps = pkg['devDependencies']
-  if (!isRecord(deps)) throw new Error('workspace devDependencies missing')
-  deps['oxlint'] = oxlint
-  deps['oxlint-tsgolint'] = tsgolint
-  pkg['scripts'] = { check: 'tsc && oxlint' }
-  await writeJson(join(ws, 'package.json'), pkg)
-}
-
-export async function materializeArm(dest: string, arm: ArmId): Promise<void> {
-  await copyTemplate(dest)
-  if (arm === 'lint') await applyLintOverlay(dest)
-}
-
-export async function mergedStrictTsconfig(): Promise<Record<string, unknown>> {
-  const base = await readJson(join(EVALS_DIR, 'template/tsconfig.json'))
+export async function mergedTsconfig(templateTsconfig: string): Promise<Record<string, unknown>> {
+  const base = await readJson(templateTsconfig)
   const strict = await readJson(join(REPO_ROOT, 'tsconfig/strict.json'))
   if (!isRecord(base) || !isRecord(strict)) throw new Error('tsconfig must be an object')
   const baseOpts = base['compilerOptions']
@@ -259,6 +211,38 @@ export async function mergedStrictTsconfig(): Promise<Record<string, unknown>> {
     compilerOptions: { ...baseOpts, ...extra },
     include: ['src'],
   }
+}
+
+export async function repoDevDeps(): Promise<Record<string, unknown>> {
+  const repoPkg = await readJson(join(REPO_ROOT, 'package.json'))
+  if (!isRecord(repoPkg)) throw new Error('package.json must be an object')
+  const deps = repoPkg['devDependencies']
+  if (!isRecord(deps)) throw new Error('repo devDependencies missing')
+  return deps
+}
+
+export function pinnedDep(deps: Record<string, unknown>, name: string): string {
+  const v = deps[name]
+  if (typeof v !== 'string') throw new Error(`pinned ${name} missing from the repo package.json`)
+  return v
+}
+
+export function withComplexityYardstick(example: Record<string, unknown>): Record<string, unknown> {
+  const pluginsRaw = example['plugins']
+  const plugins = Array.isArray(pluginsRaw) ? pluginsRaw.filter(p => typeof p === 'string') : []
+  if (!plugins.includes('eslint')) plugins.push('eslint')
+  const rules = example['rules']
+  if (!isRecord(rules)) throw new Error('oxlintrc rules missing')
+  return {
+    ...example,
+    plugins,
+    rules: { ...rules, 'eslint/complexity': ['error', { max: 0 }] },
+  }
+}
+
+export async function copySolution(dest: string, solutionDir: string): Promise<void> {
+  await mkdir(join(dest, 'src'), { recursive: true })
+  await cp(join(solutionDir, 'src'), join(dest, 'src'), { recursive: true })
 }
 
 export function findLeak(text: string): string | undefined {
