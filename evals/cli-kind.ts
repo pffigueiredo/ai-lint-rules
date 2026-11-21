@@ -284,4 +284,5 @@ export const cliKind: Kind = {
     return cfg
   },
   yardstickTsconfig: () => mergedTsconfig(join(EVALS_DIR, 'template/tsconfig.json')),
+  concurrency: undefined,
 }

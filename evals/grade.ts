@@ -19,6 +19,7 @@ import {
   listCheckpointTags,
   listProblemSlugs,
   readJson,
+  selfCheckPool,
   writeJson,
 } from './lib.ts'
 import { getKind, loadProblem, materializeArm } from './kinds.ts'
@@ -440,6 +441,8 @@ async function selfCheckMetrics(): Promise<void> {
 async function selfCheck(): Promise<void> {
   const slugs = await listProblemSlugs()
   if (slugs.length === 0) throw new Error('no problems under evals/problems')
+  process.stderr.write('self-check pool\n')
+  await selfCheckPool()
   process.stderr.write('self-check metrics fixture\n')
   await selfCheckMetrics()
   for (const slug of slugs) {
@@ -447,7 +450,7 @@ async function selfCheck(): Promise<void> {
     process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
-  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture\n`)
+  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, pool\n`)
 }
 
 async function loadManifest(runDir: string): Promise<Manifest> {

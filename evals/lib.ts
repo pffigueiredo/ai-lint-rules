@@ -44,6 +44,7 @@ export type Kind = {
   sourceFiles: (srcDir: string) => Promise<string[]>
   yardstickOxlint: () => Promise<Record<string, unknown>>
   yardstickTsconfig: () => Promise<Record<string, unknown>>
+  concurrency: number | undefined
 }
 
 export type WorkspaceRow = {
@@ -380,4 +381,121 @@ export function parseManifest(raw: unknown): Manifest {
     throw new Error('manifest missing createdAt/model/checkpoints')
   }
   return { createdAt, model, checkpoints, workspaces }
+}
+
+export async function pool<T>(opts: {
+  items: readonly T[]
+  concurrency: number
+  kindOf: (item: T) => string
+  kindLimit: (kind: string) => number | undefined
+  run: (item: T) => Promise<void>
+}): Promise<void> {
+  const { items, concurrency, kindOf, kindLimit, run } = opts
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('concurrency must be a positive integer')
+  const q = items.slice()
+  const inflight = new Map<string, number>()
+  let running = 0
+  const errors: unknown[] = []
+  let waiting: (() => void) | undefined
+  let missed = false
+
+  const cap = (kind: string): number => {
+    const n = kindLimit(kind)
+    return n === undefined ? Number.POSITIVE_INFINITY : n
+  }
+  const canRun = (kind: string): boolean => running < concurrency && (inflight.get(kind) ?? 0) < cap(kind)
+  const pick = (): T | undefined => {
+    const i = q.findIndex(item => canRun(kindOf(item)))
+    if (i < 0) return undefined
+    const item = q[i]
+    q.splice(i, 1)
+    return item
+  }
+  const signal = (): void => {
+    missed = true
+    const w = waiting
+    waiting = undefined
+    w?.()
+  }
+  const wait = (): Promise<void> => {
+    if (missed) {
+      missed = false
+      return Promise.resolve()
+    }
+    return new Promise(resolve => {
+      waiting = resolve
+      if (!missed) return
+      missed = false
+      waiting = undefined
+      resolve()
+    })
+  }
+  const start = (item: T): void => {
+    const kind = kindOf(item)
+    running += 1
+    inflight.set(kind, (inflight.get(kind) ?? 0) + 1)
+    void run(item)
+      .catch((err: unknown) => {
+        errors.push(err)
+        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`)
+      })
+      .finally(() => {
+        running -= 1
+        inflight.set(kind, (inflight.get(kind) ?? 1) - 1)
+        signal()
+      })
+  }
+
+  for (;;) {
+    for (;;) {
+      const item = pick()
+      if (item === undefined) break
+      start(item)
+    }
+    if (q.length === 0 && running === 0) break
+    await wait()
+  }
+  if (errors.length > 0) throw new AggregateError(errors, `${errors.length} job(s) failed; rerun with --out to resume`)
+}
+
+export async function selfCheckPool(): Promise<void> {
+  const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+  type Job = { id: string; kind: 'react' | 'cli' }
+  const jobs: Job[] = [
+    { id: 'r1', kind: 'react' },
+    { id: 'r2', kind: 'react' },
+    { id: 'r3', kind: 'react' },
+    { id: 'c1', kind: 'cli' },
+    { id: 'c2', kind: 'cli' },
+    { id: 'c3', kind: 'cli' },
+    { id: 'c4', kind: 'cli' },
+  ]
+  let react = 0
+  let cli = 0
+  let maxReact = 0
+  let maxCli = 0
+  const done: string[] = []
+  await pool({
+    items: jobs,
+    concurrency: 3,
+    kindOf: job => job.kind,
+    kindLimit: kind => (kind === 'react' ? 1 : undefined),
+    run: async job => {
+      if (job.kind === 'react') {
+        react += 1
+        maxReact = Math.max(maxReact, react)
+        await sleep(40)
+        react -= 1
+      } else {
+        cli += 1
+        maxCli = Math.max(maxCli, cli)
+        await sleep(40)
+        cli -= 1
+      }
+      done.push(job.id)
+    },
+  })
+  if (maxReact !== 1) throw new Error(`pool: max simultaneous react jobs ${maxReact}, want 1`)
+  if (maxCli < 2) throw new Error(`pool: max simultaneous cli jobs ${maxCli}, want >= 2 overlapping`)
+  if (done.length !== jobs.length) throw new Error(`pool: finished ${done.length}/${jobs.length}`)
 }

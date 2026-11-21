@@ -13,6 +13,7 @@ import {
   capture,
   findLeak,
   parseManifest,
+  pool,
   spawnCursorAgent,
   writeJson,
 } from './lib.ts'
@@ -175,23 +176,6 @@ async function runAgent(
   return ran.status
 }
 
-async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
-  const q = items.slice()
-  const errors: unknown[] = []
-  const workers = Array.from({ length: Math.min(n, Math.max(q.length, 1)) }, async () => {
-    for (;;) {
-      const item = q.shift()
-      if (item === undefined) return
-      await fn(item).catch((err: unknown) => {
-        errors.push(err)
-        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`)
-      })
-    }
-  })
-  await Promise.all(workers)
-  if (errors.length > 0) throw new AggregateError(errors, `${errors.length} job(s) failed; rerun with --out to resume`)
-}
-
 async function prepareWorkspace(dest: string, arm: ArmId, kindId: string): Promise<void> {
   await rm(dest, { recursive: true, force: true })
   await materializeArm(dest, arm, kindId)
@@ -290,11 +274,16 @@ async function main(): Promise<void> {
     }
   }
   await writeJson(join(runDir, 'manifest.json'), manifest)
-  await pool(jobs, opts.concurrency, job =>
-    runJob(runDir, opts.model, opts.timeoutMs, opts.stallMs, job).catch((err: unknown) => {
-      throw new Error(`${job.row.id}: ${err instanceof Error ? err.message : String(err)}`)
-    }),
-  )
+  await pool({
+    items: jobs,
+    concurrency: opts.concurrency,
+    kindOf: job => job.problem.kind,
+    kindLimit: kind => getKind(kind).concurrency,
+    run: job =>
+      runJob(runDir, opts.model, opts.timeoutMs, opts.stallMs, job).catch((err: unknown) => {
+        throw new Error(`${job.row.id}: ${err instanceof Error ? err.message : String(err)}`)
+      }),
+  })
   process.stdout.write(`${runDir}\n`)
 }
 

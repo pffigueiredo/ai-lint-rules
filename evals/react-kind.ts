@@ -300,4 +300,5 @@ export const reactKind: Kind = {
     return cfg
   },
   yardstickTsconfig: () => mergedTsconfig(join(TEMPLATE_DIR, 'tsconfig.json')),
+  concurrency: 1,
 }
