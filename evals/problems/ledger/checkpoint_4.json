@@ -204,19 +204,6 @@
     }]
   },
   {
-    "name": "zero-base-format",
-    "group": "functionality",
-    "files": {
-      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"},{\"id\":\"2\",\"account\":\"a\",\"amount\":-100,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
-      "rates.json": "[]"
-    },
-    "steps": [{
-      "args": ["balances", "ledger.json", "--base", "USD", "--rates", "rates.json"],
-      "exitCode": 0,
-      "stdout": "a 0.00"
-    }]
-  },
-  {
     "name": "report-with-base",
     "group": "functionality",
     "files": {
@@ -230,16 +217,29 @@
     }]
   },
   {
-    "name": "rate-extra-field",
+    "name": "account-before-convert",
     "group": "functionality",
     "files": {
-      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
-      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5,\"note\":\"x\"}]"
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"},{\"id\":\"2\",\"account\":\"bob\",\"amount\":100,\"currency\":\"GBP\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
     },
     "steps": [{
-      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "args": ["balances", "ledger.json", "--account", "alice", "--base", "EUR", "--rates", "rates.json"],
       "exitCode": 0,
-      "stdout": "a 0.50"
+      "stdout": "alice 0.50"
+    }]
+  },
+  {
+    "name": "mixed-major-and-minor",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":15},{\"id\":\"2\",\"account\":\"a\",\"amount\":1500,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "USD", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 30.00"
     }]
   }
 ]

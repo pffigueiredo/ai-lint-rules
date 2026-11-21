@@ -187,12 +187,25 @@
     ]
   },
   {
-    "name": "ready-sort-priority",
+    "name": "blocked-recurring-does-not-spawn",
     "group": "functionality",
     "steps": [
-      { "args": ["add", "low", "--priority", "1"], "exitCode": 0, "stdout": "added 1" },
-      { "args": ["add", "high", "--priority", "5"], "exitCode": 0, "stdout": "added 2" },
-      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "2 [open] high\n1 [open] low" }
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--due", "2024-01-01", "--every", "week"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["done", "2"], "exitCode": 1, "stdout": "blocked" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 2\ndone 0" }
+    ]
+  },
+  {
+    "name": "blocked-still-overdue",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--due", "2024-01-01"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["overdue", "--today", "2024-01-02"], "exitCode": 0, "stdout": "2 [open] b" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "1 [open] a" }
     ]
   },
   {

@@ -179,22 +179,41 @@
     }]
   },
   {
-    "name": "budget-keys-sorted",
+    "name": "firing-uses-occurrence-rate",
     "group": "functionality",
     "files": {
-      "ledger.json": "[]",
-      "limits.json": "{\"zebra\":1,\"apple\":1}"
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":15}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5},{\"date\":\"2024-02-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":2}]"
     },
     "steps": [{
-      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json"],
+      "args": ["balances", "ledger.json", "--from", "2024-01-01", "--to", "2024-02-28", "--base", "EUR", "--rates", "rates.json"],
       "exitCode": 0,
-      "json": {
-        "month": "2024-01",
-        "categories": {
-          "apple": { "spent": 0, "limit": 1, "ok": true },
-          "zebra": { "spent": 0, "limit": 1, "ok": true }
-        }
-      }
+      "stdout": "a 2.50"
+    }]
+  },
+  {
+    "name": "century-common-year",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"1900-01-31\",\"every\":\"month\",\"day\":31}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "1900-01-31", "--to", "1900-03-31"],
+      "exitCode": 0,
+      "stdout": "a 3"
+    }]
+  },
+  {
+    "name": "other-account-template-ignored",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-15\"},{\"id\":\"2\",\"account\":\"bob\",\"amount\":100,\"currency\":\"GBP\",\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":1}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2024-01-01", "--to", "2024-01-31", "--account", "alice", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "alice 0.50"
     }]
   },
   {
@@ -228,17 +247,5 @@
         "json": { "month": "2024-03", "accounts": { "a": 1 }, "total": 1 }
       }
     ]
-  },
-  {
-    "name": "from-only-skips-templates",
-    "group": "functionality",
-    "files": {
-      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":10,\"date\":\"2024-06-01\"},{\"id\":\"2\",\"account\":\"a\",\"amount\":99,\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":1}]"
-    },
-    "steps": [{
-      "args": ["balances", "ledger.json", "--from", "2024-01-01"],
-      "exitCode": 0,
-      "stdout": "a 10"
-    }]
   }
 ]

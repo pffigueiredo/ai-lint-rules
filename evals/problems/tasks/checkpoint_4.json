@@ -149,15 +149,13 @@
     ]
   },
   {
-    "name": "json-every-week",
-    "group": "functionality",
-    "steps": [
-      { "args": ["add", "x", "--due", "2024-01-08", "--every", "week", "--tag", "work"], "exitCode": 0, "stdout": "added 1" },
-      {
-        "args": ["list", "--json"],
-        "exitCode": 0,
-        "json": [{ "id": 1, "title": "x", "status": "open", "priority": 0, "tags": ["work"], "due": "2024-01-08", "every": "week" }]
-      }
-    ]
+    "name": "today-invalid-without-due",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--today", "2024-02-30"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "today-invalid-with-absolute-due",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--due", "2024-01-01", "--today", "2024-02-30"], "exitCode": 1, "stdout": "" }]
   }
 ]

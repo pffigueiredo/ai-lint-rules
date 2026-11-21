@@ -9,7 +9,7 @@
 - `--due YYYY-MM-DD` stores that calendar day. The day must exist in the Gregorian calendar. `2024-02-29` is valid. `2024-02-30` and `2023-02-29` are not.
 - `--due +Nd` or `--due +Nw` where `N` is a positive integer. `d` is days. `w` is 7-day weeks, so `+2w` is 14 days. Resolve against `--today YYYY-MM-DD` on the same `add`. `--today` must be a real calendar day. If `--due` is relative and `--today` is missing, or either value is invalid, exit `1` and print nothing.
 
-`--today` is not stored. An absolute `--due` does not need `--today`.
+`--today` is not stored. An absolute `--due` does not need `--today`. If `--today` appears, it must be a real calendar day, even when `--due` is absolute or omitted.
 
 ## overdue
 

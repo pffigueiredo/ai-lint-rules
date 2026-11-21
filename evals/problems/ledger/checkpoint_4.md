@@ -25,7 +25,9 @@ For `report`, the same rule uses this line instead:
 
 	usage: report --base CODE --rates FILE
 
-`--account`, `--from`, and `--to` still apply to `balances`. Date filters run first. Then convert. Then sum.
+`--account`, `--from`, and `--to` still apply to `balances`. Date filters run first. Then keep `--account` matches. Then convert. Then sum. An entry in another account that cannot be converted does not fail the command when `--account` is set.
+
+A rate row whose `date` equals the entry's `date` is used. A later rate is not.
 
 ## Rates file
 

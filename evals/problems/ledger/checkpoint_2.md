@@ -1,6 +1,6 @@
 # Filters and a monthly report
 
-`balances` still works as before. An entry may include `date`, a `YYYY-MM-DD` string. Entries without `date` stay valid.
+`balances` still works as before. An entry may include `date`, a `YYYY-MM-DD` string. Entries without `date` stay valid. If `date` is present and is not exactly that shape, the file is invalid (exit `3`).
 
 ## Account filter
 

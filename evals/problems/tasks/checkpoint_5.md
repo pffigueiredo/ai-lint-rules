@@ -39,6 +39,8 @@ Print only open tasks that are not blocked. Same line shape and sort as `list`. 
 
 `done` on an open blocked task: exit `1` and print `blocked`. Do not change status. Do not spawn a recurring next task. That failed `done` is not undone by `undo`.
 
+A blocked open task still appears in `overdue`. `list --ready` is what hides blocked tasks.
+
 `done` on a task that is already done still prints `done ID` and exits `0`, even if it would be blocked were it open.
 
 ## Undo

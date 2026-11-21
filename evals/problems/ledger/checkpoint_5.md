@@ -19,7 +19,7 @@ A template fires once per calendar month on `day`, starting at its own `date`. I
 	day 29, date 2024-02-01, window 2024-02-01 through 2025-02-28
 	-> 2024-02-29, then the 29th of each later month, and 2025-02-28
 
-Each firing is a virtual posted entry with the template's `account`, `amount`, `currency`, and `category`, and with `date` set to the firing day. Apply the same date filters, conversion, and summing as for posted entries.
+Each firing is a virtual posted entry with the template's `account`, `amount`, `currency`, and `category`, and with `date` set to the firing day. Apply the same date filters, conversion, and summing as for posted entries. Conversion uses that firing day, not the template's `date`.
 
 `balances` expands templates only when both `--from` and `--to` are set. The window is those two days, inclusive. A firing before the template `date`, before `--from`, or after `--to` is dropped.
 
