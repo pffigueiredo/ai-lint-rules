@@ -213,6 +213,8 @@ node evals/grade.ts --self-check
 
 That checks that each reference solution passes every hidden check and `pnpm check` under the lint arm. An empty `src/cli.ts` or an `App` that returns null fails every check. `pnpm typecheck` includes `evals/`.
 
+Hidden JSON cases do not try long command sequences. `node evals/verify.ts --self-check` drives the tasks CLI with fast-check sequences and checks spec-stated state-machine properties. `node evals/verify.ts <runDir>` scores plain vs lint `tasks-*` snapshots at a checkpoint and writes `properties.jsonl` plus `properties.md`. See `.cursor/skills/verify-tasks-state-machine/SKILL.md`.
+
 After `grade.ts`, score slop with an LLM judge. Grade must have written `results.jsonl` first, because flag rates are per 100 statements.
 
 ```sh
