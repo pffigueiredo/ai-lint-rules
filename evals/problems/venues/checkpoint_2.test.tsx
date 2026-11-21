@@ -1,0 +1,124 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import App from './src/App'
+import { jsonResponse, renderApp, requestPath, setPath } from './render-app.tsx'
+
+const VENUES = [
+  { id: 'v1', name: 'Moonlight', city: 'Lisbon', open: true },
+  { id: 'v2', name: 'Harbor', city: 'Porto', open: false },
+  { id: 'v3', name: 'Atlas', city: 'Lisbon', open: true },
+]
+
+function stubList(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      if (requestPath(input) === '/api/venues') return jsonResponse({ venues: VENUES })
+      return jsonResponse({ error: 'missing' }, 404)
+    }),
+  )
+}
+
+function query(): URLSearchParams {
+  return new URLSearchParams(window.location.search)
+}
+
+beforeEach(() => {
+  setPath('/')
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  setPath('/')
+})
+
+describe('core', () => {
+  it('filters the list by the search box', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Harbor' })).toBeTruthy()
+    await user.type(screen.getByLabelText('Search'), 'lis')
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+    })
+    expect(screen.getByRole('button', { name: 'Moonlight' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Atlas' })).toBeTruthy()
+  })
+
+  it('keeps only open venues when Open now is checked', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Harbor' })).toBeTruthy()
+    await user.click(screen.getByLabelText('Open now'))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+    })
+    expect(screen.getByRole('button', { name: 'Moonlight' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Atlas' })).toBeTruthy()
+  })
+
+  it('restores search and open from the URL', async () => {
+    setPath('/?q=lis&open=1')
+    stubList()
+    renderApp(<App />)
+    const box = await screen.findByLabelText('Search')
+    expect((box as HTMLInputElement).value).toBe('lis')
+    expect((screen.getByLabelText('Open now') as HTMLInputElement).checked).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Moonlight' })).toBeTruthy()
+  })
+
+  it('sorts by city then id when Sort is City', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Atlas' })).toBeTruthy()
+    await user.selectOptions(screen.getByLabelText('Sort'), 'City')
+    await waitFor(() => {
+      expect(query().get('sort')).toBe('city')
+    })
+    const names = screen.getAllByRole('button').map(el => el.textContent)
+    expect(names).toEqual(['Moonlight', 'Atlas', 'Harbor'])
+  })
+})
+
+describe('error', () => {
+  it('still alerts when the list request fails with filters in the URL', async () => {
+    setPath('/?q=lis')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('offline'))),
+    )
+    renderApp(<App />)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByText('Could not load venues')).toBeTruthy()
+  })
+})
+
+describe('functionality', () => {
+  it('writes q to the URL as the user types', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await screen.findByLabelText('Search')
+    await user.type(screen.getByLabelText('Search'), 'por')
+    await waitFor(() => {
+      expect(query().get('q')).toBe('por')
+    })
+  })
+
+  it('writes open=1 to the URL when Open now is checked', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await screen.findByLabelText('Open now')
+    await user.click(screen.getByLabelText('Open now'))
+    await waitFor(() => {
+      expect(query().get('open')).toBe('1')
+    })
+  })
+})

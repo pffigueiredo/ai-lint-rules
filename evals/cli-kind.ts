@@ -266,6 +266,7 @@ export const cliKind: Kind = {
   promptFor,
   applyLintOverlay,
   prepareTools,
+  prepareGrade: prepareTools,
   hydrateForChecks: async (dest, solutionDir) => {
     await copySolution(dest, solutionDir)
   },

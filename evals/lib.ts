@@ -37,6 +37,7 @@ export type Kind = {
   promptFor: (checkpoint: number, spec: string) => string
   applyLintOverlay: (ws: string) => Promise<void>
   prepareTools: (ws: string) => Promise<void>
+  prepareGrade: (ws: string) => Promise<void>
   hydrateForChecks: (dest: string, solutionDir: string) => Promise<void>
   hydrateEmpty: (dest: string) => Promise<void>
   runCheckpoint: (ws: string, problem: Problem, checkpoint: number) => Promise<CheckRun>

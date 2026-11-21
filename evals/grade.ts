@@ -338,8 +338,8 @@ async function selfCheckProblem(problem: Problem): Promise<void> {
   try {
     await materializeArm(lintWs, 'lint', problem.kind)
     await copySolution(lintWs, problem.solutionDir)
-    await kind.prepareTools(lintWs)
     await assertPlantedBlind(lintWs, kind)
+    await kind.prepareTools(lintWs)
     const check = await capture('pnpm', ['check'], { cwd: lintWs, timeoutMs: 60_000 })
     if (check.code !== 0) {
       throw new Error(`${problem.slug} solution failed lint-arm pnpm check:\n${check.stdout}\n${check.stderr}`)
@@ -384,14 +384,14 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
   const bundlePath = join(runDir, ws.bundle)
   const cloned = await git(process.cwd(), ['clone', bundlePath, clone])
   if (cloned.code !== 0) throw new Error(`git clone ${bundlePath}: ${cloned.stderr}`)
-  await kind.prepareTools(clone)
+  await kind.prepareGrade(clone)
   const tags = await listCheckpointTags(clone)
   const rows: Row[] = []
   let prevLoc = 0
   for (const n of tags) {
     const co = await git(clone, ['checkout', '-f', `v${n}`])
     if (co.code !== 0) throw new Error(`checkout v${n}: ${co.stderr}`)
-    await kind.prepareTools(clone)
+    await kind.prepareGrade(clone)
     const cases = await kind.runCheckpoint(clone, problem, n)
     const q = await qualityOf(clone, kind)
     const prevRef = n === 1 ? 'v0' : `v${n - 1}`

@@ -9,6 +9,15 @@ export function jsonResponse(data: unknown, status = 200): Response {
   })
 }
 
+export function requestPath(input: RequestInfo | URL): string {
+  const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  return new URL(href, 'http://localhost').pathname
+}
+
+export function requestMethod(init?: RequestInit): string {
+  return (init?.method ?? 'GET').toUpperCase()
+}
+
 export function setPath(path: string): void {
   window.history.replaceState({}, '', path)
 }

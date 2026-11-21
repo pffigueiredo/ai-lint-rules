@@ -122,10 +122,18 @@ async function mergeGradingDeps(ws: string): Promise<void> {
   await writeJson(join(ws, 'package.json'), pkg)
 }
 
-async function prepareTools(ws: string): Promise<void> {
-  await mergeGradingDeps(ws)
+async function pnpmInstall(ws: string): Promise<void> {
   const ran = await capture('pnpm', ['install', '--prefer-offline'], { cwd: ws, timeoutMs: 180_000 })
   if (ran.code !== 0) throw new Error(`pnpm install\n${ran.stderr}${ran.stdout}`)
+}
+
+async function prepareTools(ws: string): Promise<void> {
+  await pnpmInstall(ws)
+}
+
+async function prepareGrade(ws: string): Promise<void> {
+  await mergeGradingDeps(ws)
+  await pnpmInstall(ws)
 }
 
 function promptFor(checkpoint: number, spec: string): string {
@@ -197,6 +205,16 @@ async function copyHiddenChecks(ws: string, problem: Problem, checkpoint: number
 }
 
 async function writeVitestConfig(ws: string, files: string[]): Promise<void> {
+  await writeFile(
+    join(ws, 'grader-setup.mjs'),
+    `import { afterEach } from 'vitest'
+import { cleanup } from '@testing-library/react'
+
+afterEach(() => {
+  cleanup()
+})
+`,
+  )
   const body = `import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
@@ -207,7 +225,8 @@ export default defineConfig({
     reporters: ['json'],
     outputFile: 'check-results.json',
     include: ${JSON.stringify(files)},
-    testTimeout: 8000,
+    setupFiles: ['./grader-setup.mjs'],
+    testTimeout: 2500,
     fileParallelism: false,
   },
 })
@@ -257,10 +276,11 @@ export const reactKind: Kind = {
   promptFor,
   applyLintOverlay,
   prepareTools,
+  prepareGrade,
   hydrateForChecks: async (dest, solutionDir) => {
     await hydrateFromTemplate(dest)
     await copySolution(dest, solutionDir)
-    await prepareTools(dest)
+    await prepareGrade(dest)
   },
   hydrateEmpty: async dest => {
     await hydrateFromTemplate(dest)
@@ -268,7 +288,7 @@ export const reactKind: Kind = {
       join(dest, 'src/App.tsx'),
       'export default function App() {\n  return null\n}\n',
     )
-    await prepareTools(dest)
+    await prepareGrade(dest)
   },
   runCheckpoint,
   sourceFiles: srcDir => walkSource(srcDir, ['.ts', '.tsx']),
