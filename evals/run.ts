@@ -9,9 +9,11 @@ import {
   type Manifest,
   type Problem,
   type WorkspaceRow,
+  ARM_IDS,
   EVALS_DIR,
   capture,
   findLeak,
+  isArmId,
   parseManifest,
   pool,
   spawnCursorAgent,
@@ -59,10 +61,10 @@ function parseArgs(argv: string[]): Opts {
   const stallRaw = flagOnce(argv, '--stall-min')
   const out = flagOnce(argv, '--out')
   if (problems.length === 0) throw new Error('need --problem <slug>')
-  if (armRaw.length === 0) throw new Error('need --arm plain|lint')
+  if (armRaw.length === 0) throw new Error(`need --arm ${ARM_IDS.join('|')}`)
   const arms: ArmId[] = []
   for (const a of armRaw) {
-    if (a !== 'plain' && a !== 'lint') throw new Error(`bad --arm ${a}`)
+    if (!isArmId(a)) throw new Error(`bad --arm ${a}`)
     if (!arms.includes(a)) arms.push(a)
   }
   const reps = Number(repsRaw)

@@ -9,8 +9,13 @@ export const REPO_ROOT = dirname(EVALS_DIR)
 export const LEAK_RE =
   /\b(eval|test|judge|experiment|rubric|score|compar|benchmark|candidate|arena)/i
 
-export type ArmId = 'plain' | 'lint'
+export const ARM_IDS = ['plain', 'lint', 'lint-cc'] as const
+export type ArmId = (typeof ARM_IDS)[number]
 export type Group = 'core' | 'error' | 'functionality'
+
+export function isArmId(v: string): v is ArmId {
+  return (ARM_IDS as readonly string[]).includes(v)
+}
 
 export type Problem = {
   slug: string
@@ -355,9 +360,10 @@ export function findLeak(text: string): string | undefined {
   return token
 }
 
-export const ARMS: { id: ArmId; overlay: boolean }[] = [
-  { id: 'plain', overlay: false },
-  { id: 'lint', overlay: true },
+export const ARMS: { id: ArmId; overlay: 'none' | 'lint' | 'lint-cc' }[] = [
+  { id: 'plain', overlay: 'none' },
+  { id: 'lint', overlay: 'lint' },
+  { id: 'lint-cc', overlay: 'lint-cc' },
 ]
 
 export function parseManifest(raw: unknown): Manifest {
@@ -369,7 +375,7 @@ export function parseManifest(raw: unknown): Manifest {
     if (typeof id !== 'string' || typeof problem !== 'string' || typeof model !== 'string') {
       throw new Error('manifest workspace missing strings')
     }
-    if (arm !== 'plain' && arm !== 'lint') throw new Error(`bad arm ${String(arm)}`)
+    if (typeof arm !== 'string' || !isArmId(arm)) throw new Error(`bad arm ${String(arm)}`)
     if (typeof rep !== 'number' || typeof bundle !== 'string' || typeof workspaceDir !== 'string') {
       throw new Error('manifest workspace missing fields')
     }
