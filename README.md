@@ -247,6 +247,14 @@ On the lint arm, the reviewer sees the overlay rules and their messages from the
 
 `review.jsonl` holds every verdict. Rerun the same command to resume. Snapshots and hits already in the file are skipped.
 
+Score candidate checks that neither arm enforced, on the same frozen snapshots, without new agent runs:
+
+```sh
+node evals/sweep.ts evals/runs/<timestamp>
+```
+
+That writes `sweep.jsonl` (one row per workspace, checkpoint, and check), reviews up to 10 product hits per check per arm with the same benefit prompt as `--review` (default `gpt-5.6-sol-high`, never grok), replays CLI `bug` inputs, and writes `sweep.md`. Pass `--no-review` to skip the LLM. `node evals/sweep.ts --self-check` plants one known hit per check.
+
 ```sh
 node evals/judge.ts --self-check
 ```
