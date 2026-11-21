@@ -1,0 +1,155 @@
+[
+  {
+    "name": "import-new-rows",
+    "group": "core",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,alice,10,2024-01-15\n2,bob,-3,2024-01-16\n"
+    },
+    "steps": [{
+      "args": ["import", "ledger.json", "rows.csv"],
+      "exitCode": 0,
+      "stdout": "imported 2 skipped 0",
+      "files": {
+        "ledger.json": [
+          { "id": "1", "account": "alice", "amount": 10, "date": "2024-01-15" },
+          { "id": "2", "account": "bob", "amount": -3, "date": "2024-01-16" }
+        ]
+      }
+    }]
+  },
+  {
+    "name": "skip-existing-id",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":1}]",
+      "rows.csv": "id,account,amount,date\n1,alice,99,2024-01-15\n2,bob,5,2024-01-16\n"
+    },
+    "steps": [{
+      "args": ["import", "ledger.json", "rows.csv"],
+      "exitCode": 0,
+      "stdout": "imported 1 skipped 1",
+      "files": {
+        "ledger.json": [
+          { "id": "1", "account": "alice", "amount": 1 },
+          { "id": "2", "account": "bob", "amount": 5, "date": "2024-01-16" }
+        ]
+      }
+    }]
+  },
+  {
+    "name": "skip-dup-in-csv",
+    "group": "core",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,alice,1,2024-01-01\n1,alice,2,2024-01-02\n"
+    },
+    "steps": [{
+      "args": ["import", "ledger.json", "rows.csv"],
+      "exitCode": 0,
+      "stdout": "imported 1 skipped 1"
+    }]
+  },
+  {
+    "name": "import-then-balances",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":4}]",
+      "rows.csv": "id,account,amount,date\n2,alice,6,2024-01-01\n"
+    },
+    "steps": [
+      { "args": ["import", "ledger.json", "rows.csv"], "exitCode": 0, "stdout": "imported 1 skipped 0" },
+      { "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "alice 10" }
+    ]
+  },
+  {
+    "name": "missing-csv",
+    "group": "error",
+    "files": { "ledger.json": "[]" },
+    "steps": [{ "args": ["import", "ledger.json", "nope.csv"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "missing-ledger",
+    "group": "error",
+    "files": { "rows.csv": "id,account,amount,date\n" },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "bad-header",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,name,amount,date\n1,a,1,2024-01-01\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 4, "stdout": "" }]
+  },
+  {
+    "name": "csv-bad-amount",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,a,nope,2024-01-01\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 4, "stdout": "" }]
+  },
+  {
+    "name": "csv-bad-date",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,a,1,2024/01/01\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 4, "stdout": "" }]
+  },
+  {
+    "name": "extra-csv-field",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,a,1,2024-01-01,x\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 4, "stdout": "" }]
+  },
+  {
+    "name": "header-only",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n"
+    },
+    "steps": [{
+      "args": ["import", "ledger.json", "rows.csv"],
+      "exitCode": 0,
+      "stdout": "imported 0 skipped 0",
+      "files": { "ledger.json": [] }
+    }]
+  },
+  {
+    "name": "imported-shows-in-report",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,alice,10,2024-03-02\n"
+    },
+    "steps": [
+      { "args": ["import", "ledger.json", "rows.csv"], "exitCode": 0, "stdout": "imported 1 skipped 0" },
+      {
+        "args": ["report", "ledger.json", "--month", "2024-03"],
+        "exitCode": 0,
+        "json": { "month": "2024-03", "accounts": { "alice": 10 }, "total": 10 }
+      }
+    ]
+  },
+  {
+    "name": "zero-amount-row",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n1,a,0,2024-01-01\n"
+    },
+    "steps": [
+      { "args": ["import", "ledger.json", "rows.csv"], "exitCode": 0, "stdout": "imported 1 skipped 0" },
+      { "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 0" }
+    ]
+  }
+]

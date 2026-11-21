@@ -1,0 +1,97 @@
+[
+  {
+    "name": "two-accounts",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":10},{\"id\":\"2\",\"account\":\"bob\",\"amount\":-3},{\"id\":\"3\",\"account\":\"alice\",\"amount\":5}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "alice 15\nbob -3" }]
+  },
+  {
+    "name": "sorted-names",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"zoe\",\"amount\":1},{\"id\":\"2\",\"account\":\"amy\",\"amount\":2}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "amy 2\nzoe 1" }]
+  },
+  {
+    "name": "empty-array",
+    "group": "core",
+    "files": { "ledger.json": "[]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "0 accounts" }]
+  },
+  {
+    "name": "zero-sum-shown",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":5},{\"id\":\"2\",\"account\":\"alice\",\"amount\":-5}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "alice 0" }]
+  },
+  {
+    "name": "single-entry",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"a\",\"account\":\"cash\",\"amount\":100}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "cash 100" }]
+  },
+  {
+    "name": "missing-file",
+    "group": "error",
+    "steps": [{ "args": ["balances", "nope.json"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "truncated-json",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1}" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 2, "stdout": "" }]
+  },
+  {
+    "name": "not-an-array",
+    "group": "error",
+    "files": { "ledger.json": "{\"id\":\"1\"}" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "missing-amount",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"1\",\"account\":\"a\"}]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "duplicate-id",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1},{\"id\":\"1\",\"account\":\"b\",\"amount\":2}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "empty-account",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"1\",\"account\":\"\",\"amount\":1}]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "null-amount",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":null}]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "amount-as-string",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":\"1\"}]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "extra-field-ignored",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"note\":\"hi\"}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 1" }]
+  }
+]

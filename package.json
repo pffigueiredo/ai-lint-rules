@@ -5,7 +5,7 @@
   "description": "Copy-paste Oxlint rules, strict TypeScript, and oracle tests for React Compiler apps.",
   "scripts": {
     "test": "vitest run --config oxlint/react-bans/vitest.config.ts && vitest run --config oracles/vitest.config.ts",
-    "typecheck": "tsc -p oracles"
+    "typecheck": "tsc -p oracles && tsc -p evals"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.83.0",
