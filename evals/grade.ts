@@ -9,6 +9,7 @@ import {
   type Manifest,
   type Problem,
   parseManifest,
+  EVALS_DIR,
   REPO_ROOT,
   capture,
   copySolution,
@@ -106,6 +107,10 @@ function countLines(src: string): { loc: number; comments: number } {
 
 const SUPPRESSION_RE = /eslint-disable|oxlint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck/g
 const CC_RE = /complexity of (\d+)/u
+const METRICS_CODE = 'metrics(file)'
+const METRICS_RE = /statements (\d+) moduleComplexity (\d+)/u
+const METRICS_FIXTURE_STATEMENTS = 22
+const METRICS_FIXTURE_MODULE_COMPLEXITY = 11
 
 async function srcMetrics(
   ws: string,
@@ -362,15 +367,56 @@ async function selfCheckProblem(problem: Problem): Promise<void> {
   }
 }
 
+async function selfCheckMetrics(): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'metrics-'))
+  try {
+    const cfgPath = join(dir, '.oxlintrc.json')
+    await writeJson(cfgPath, {
+      jsPlugins: [join(EVALS_DIR, 'metrics-plugin.js')],
+      rules: { 'metrics/file': 'error' },
+    })
+    const ran = await capture(BIN.oxlint, ['--format', 'json', '-c', cfgPath, join(EVALS_DIR, 'metrics-fixture.js')], {
+      cwd: dir,
+      timeoutMs: 30_000,
+    })
+    const start = ran.stdout.indexOf('{')
+    if (start < 0) throw new Error(`metrics plugin produced no json:\n${ran.stdout}\n${ran.stderr}`)
+    const parsed: unknown = JSON.parse(ran.stdout.slice(start))
+    if (!isRecord(parsed) || !Array.isArray(parsed['diagnostics'])) {
+      throw new Error('metrics plugin json: missing diagnostics')
+    }
+    let message: string | undefined
+    for (const d of parsed['diagnostics']) {
+      if (!isRecord(d) || d['code'] !== METRICS_CODE || typeof d['message'] !== 'string') continue
+      message = d['message']
+      break
+    }
+    if (message === undefined) throw new Error(`metrics plugin missing ${METRICS_CODE} diagnostic`)
+    const m = METRICS_RE.exec(message)
+    if (m === null) throw new Error(`metrics diagnostic: ${message}`)
+    const statements = Number(m[1])
+    const moduleComplexity = Number(m[2])
+    if (statements !== METRICS_FIXTURE_STATEMENTS || moduleComplexity !== METRICS_FIXTURE_MODULE_COMPLEXITY) {
+      throw new Error(
+        `metrics fixture: statements ${statements} moduleComplexity ${moduleComplexity}, want ${METRICS_FIXTURE_STATEMENTS} ${METRICS_FIXTURE_MODULE_COMPLEXITY}`,
+      )
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 async function selfCheck(): Promise<void> {
   const slugs = await listProblemSlugs()
   if (slugs.length === 0) throw new Error('no problems under evals/problems')
+  process.stderr.write('self-check metrics fixture\n')
+  await selfCheckMetrics()
   for (const slug of slugs) {
     const problem = await loadProblem(slug)
     process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
-  process.stdout.write(`self-check ok: ${slugs.join(', ')}\n`)
+  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture\n`)
 }
 
 async function loadManifest(runDir: string): Promise<Manifest> {
