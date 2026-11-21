@@ -10,6 +10,7 @@ import {
   type Problem,
   parseManifest,
   EVALS_DIR,
+  METRICS_PLUGIN,
   REPO_ROOT,
   capture,
   copySolution,
@@ -44,6 +45,7 @@ type AgentStats = {
 type Quality = {
   loc: number
   commentLines: number
+  statements: number
   functions: number
   ccHigh: number
   ccExtreme: number
@@ -69,10 +71,12 @@ type Row = {
   cases: CaseResult[]
   loc: number
   commentLines: number
+  statements: number
   linesAdded: number
   linesRemoved: number
   churn: number
   deltaLocPct: number
+  deltaStatementsPct: number
   functions: number
   ccHigh: number
   ccExtreme: number
@@ -131,21 +135,45 @@ async function srcMetrics(
   return { loc, commentLines, suppressions, files }
 }
 
-function parseOxlint(stdout: string): { functions: number; ccHigh: number; ccExtreme: number; ccMax: number; lintErrors: number; lintByRule: Record<string, number> } {
-  const start = stdout.indexOf('{')
-  if (start < 0) {
-    return { functions: 0, ccHigh: 0, ccExtreme: 0, ccMax: 0, lintErrors: 0, lintByRule: {} }
+type LintMetrics = {
+  statements: number
+  metricsFiles: number
+  functions: number
+  ccHigh: number
+  ccExtreme: number
+  ccMax: number
+  lintErrors: number
+  lintByRule: Record<string, number>
+}
+
+function emptyLintMetrics(): LintMetrics {
+  return {
+    statements: 0,
+    metricsFiles: 0,
+    functions: 0,
+    ccHigh: 0,
+    ccExtreme: 0,
+    ccMax: 0,
+    lintErrors: 0,
+    lintByRule: {},
   }
+}
+
+function addFn(acc: LintMetrics, n: number): void {
+  acc.functions += 1
+  if (n > acc.ccMax) acc.ccMax = n
+  if (n > 10) acc.ccHigh += 1
+  if (n > 30) acc.ccExtreme += 1
+}
+
+function parseOxlint(stdout: string): LintMetrics {
+  const start = stdout.indexOf('{')
+  if (start < 0) return emptyLintMetrics()
   const parsed: unknown = JSON.parse(stdout.slice(start))
   if (!isRecord(parsed) || !Array.isArray(parsed['diagnostics'])) {
     throw new Error('oxlint json: missing diagnostics')
   }
-  let functions = 0
-  let ccHigh = 0
-  let ccExtreme = 0
-  let ccMax = 0
-  let lintErrors = 0
-  const lintByRule: Record<string, number> = {}
+  const acc = emptyLintMetrics()
   for (const d of parsed['diagnostics']) {
     if (!isRecord(d)) continue
     const code = d['code']
@@ -153,27 +181,29 @@ function parseOxlint(stdout: string): { functions: number; ccHigh: number; ccExt
     const message = d['message']
     if (typeof code !== 'string' || typeof message !== 'string') continue
     if (code === 'eslint(complexity)') {
-      functions += 1
       const m = CC_RE.exec(message)
-      const n = m === null ? 0 : Number(m[1])
-      if (n > ccMax) ccMax = n
-      if (n > 10) ccHigh += 1
-      if (n > 30) ccExtreme += 1
+      addFn(acc, m === null ? 0 : Number(m[1]))
+      continue
+    }
+    if (code === METRICS_CODE) {
+      const m = METRICS_RE.exec(message)
+      if (m === null) throw new Error(`metrics diagnostic: ${message}`)
+      acc.statements += Number(m[1])
+      addFn(acc, Number(m[2]))
+      acc.metricsFiles += 1
       continue
     }
     if (severity !== 'error') continue
-    lintErrors += 1
-    lintByRule[code] = (lintByRule[code] ?? 0) + 1
+    acc.lintErrors += 1
+    acc.lintByRule[code] = (acc.lintByRule[code] ?? 0) + 1
   }
-  return { functions, ccHigh, ccExtreme, ccMax, lintErrors, lintByRule }
+  return acc
 }
 
-async function lintMetrics(ws: string, kind: Kind): Promise<ReturnType<typeof parseOxlint>> {
+async function lintMetrics(ws: string, kind: Kind): Promise<LintMetrics> {
   const srcDir = join(ws, 'src')
   const files = await kind.sourceFiles(srcDir)
-  if (files.length === 0) {
-    return { functions: 0, ccHigh: 0, ccExtreme: 0, ccMax: 0, lintErrors: 0, lintByRule: {} }
-  }
+  if (files.length === 0) return emptyLintMetrics()
   const example = await kind.yardstickOxlint()
   const cfgPath = join(ws, '.metrics-oxlintrc.json')
   await writeJson(cfgPath, example)
@@ -182,7 +212,9 @@ async function lintMetrics(ws: string, kind: Kind): Promise<ReturnType<typeof pa
     timeoutMs: 60_000,
   })
   await rm(cfgPath, { force: true })
-  return parseOxlint(ran.stdout)
+  const lint = parseOxlint(ran.stdout)
+  if (lint.metricsFiles === 0) throw new Error('metrics plugin produced no diagnostics')
+  return lint
 }
 
 async function tscErrorCount(ws: string, kind: Kind): Promise<number> {
@@ -210,6 +242,7 @@ async function qualityOf(ws: string, kind: Kind): Promise<Quality> {
   return {
     loc,
     commentLines,
+    statements: lint.statements,
     functions: lint.functions,
     ccHigh: lint.ccHigh,
     ccExtreme: lint.ccExtreme,
@@ -372,7 +405,7 @@ async function selfCheckMetrics(): Promise<void> {
   try {
     const cfgPath = join(dir, '.oxlintrc.json')
     await writeJson(cfgPath, {
-      jsPlugins: [join(EVALS_DIR, 'metrics-plugin.js')],
+      jsPlugins: [METRICS_PLUGIN],
       rules: { 'metrics/file': 'error' },
     })
     const ran = await capture(BIN.oxlint, ['--format', 'json', '-c', cfgPath, join(EVALS_DIR, 'metrics-fixture.js')], {
@@ -434,6 +467,7 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
   const tags = await listCheckpointTags(clone)
   const rows: Row[] = []
   let prevLoc = 0
+  let prevStatements = 0
   for (const n of tags) {
     const co = await git(clone, ['checkout', '-f', `v${n}`])
     if (co.code !== 0) throw new Error(`checkout v${n}: ${co.stderr}`)
@@ -444,7 +478,10 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
     const diff = await numstat(clone, prevRef, `v${n}`)
     const churn = prevLoc === 0 ? 0 : (diff.added + diff.removed) / prevLoc
     const deltaLocPct = prevLoc === 0 ? (q.loc > 0 ? 100 : 0) : (100 * (q.loc - prevLoc)) / prevLoc
+    const deltaStatementsPct =
+      prevStatements === 0 ? (q.statements > 0 ? 100 : 0) : (100 * (q.statements - prevStatements)) / prevStatements
     prevLoc = q.loc
+    prevStatements = q.statements
     let agentText = ''
     try {
       agentText = await readFile(join(runDir, ws.id, `agent-${n}.jsonl`), 'utf8')
@@ -465,10 +502,12 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
       cases: cases.results,
       loc: q.loc,
       commentLines: q.commentLines,
+      statements: q.statements,
       linesAdded: diff.added,
       linesRemoved: diff.removed,
       churn,
       deltaLocPct,
+      deltaStatementsPct,
       functions: q.functions,
       ccHigh: q.ccHigh,
       ccExtreme: q.ccExtreme,
@@ -519,7 +558,9 @@ type WsSummary = {
   regression: number
   ccErosion: number
   loc: number
+  statements: number
   deltaLocPct: number
+  deltaStatementsPct: number
   churn: number
   durationMs: number
   tokens: number
@@ -555,7 +596,9 @@ function workspaceSummaries(rows: Row[]): WsSummary[] {
       regression: list.reduce((a, r) => a + r.passRate.regression, 0) / list.length,
       ccErosion: list.reduce((a, r) => a + r.ccErosion, 0) / list.length,
       loc,
+      statements: last.statements,
       deltaLocPct: list.reduce((a, r) => a + r.deltaLocPct, 0) / list.length,
+      deltaStatementsPct: list.reduce((a, r) => a + r.deltaStatementsPct, 0) / list.length,
       churn: list.reduce((a, r) => a + r.churn, 0) / list.length,
       durationMs: list.reduce((a, r) => a + r.durationMs, 0),
       tokens: list.reduce((a, r) => a + r.tokens, 0),
@@ -600,8 +643,8 @@ function outcomeTable(plain: WsSummary[], lint: WsSummary[]): string[] {
     hhRow('core pass rate', p(s => s.core), l(s => s.core), 2),
     hhRow('regression pass rate', p(s => s.regression), l(s => s.regression), 2),
     hhRow('complexity erosion', p(s => s.ccErosion), l(s => s.ccErosion), 3),
-    hhRow('LOC', p(s => s.loc), l(s => s.loc), 1),
-    hhRow('delta LOC %', p(s => s.deltaLocPct), l(s => s.deltaLocPct), 1),
+    hhRow('statements', p(s => s.statements), l(s => s.statements), 1),
+    hhRow('delta statements %', p(s => s.deltaStatementsPct), l(s => s.deltaStatementsPct), 1),
     hhRow('churn ratio', p(s => s.churn), l(s => s.churn), 3),
     hhRow('tokens', p(s => s.tokens), l(s => s.tokens), 0),
     hhRow('duration ms', p(s => s.durationMs), l(s => s.durationMs), 0),
@@ -621,7 +664,9 @@ function rowAsSummary(row: Row): WsSummary {
     regression: row.passRate.regression,
     ccErosion: row.ccErosion,
     loc,
+    statements: row.statements,
     deltaLocPct: row.deltaLocPct,
+    deltaStatementsPct: row.deltaStatementsPct,
     churn: row.churn,
     durationMs: row.durationMs,
     tokens: row.tokens,

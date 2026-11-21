@@ -228,16 +228,22 @@ export function pinnedDep(deps: Record<string, unknown>, name: string): string {
   return v
 }
 
+export const METRICS_PLUGIN = join(EVALS_DIR, 'metrics-plugin.js')
+
 export function withComplexityYardstick(example: Record<string, unknown>): Record<string, unknown> {
   const pluginsRaw = example['plugins']
   const plugins = Array.isArray(pluginsRaw) ? pluginsRaw.filter(p => typeof p === 'string') : []
   if (!plugins.includes('eslint')) plugins.push('eslint')
+  const jsPluginsRaw = example['jsPlugins']
+  const jsPlugins = Array.isArray(jsPluginsRaw) ? [...jsPluginsRaw] : []
+  if (!jsPlugins.includes(METRICS_PLUGIN)) jsPlugins.push(METRICS_PLUGIN)
   const rules = example['rules']
   if (!isRecord(rules)) throw new Error('oxlintrc rules missing')
   return {
     ...example,
     plugins,
-    rules: { ...rules, 'eslint/complexity': ['error', { max: 0 }] },
+    jsPlugins,
+    rules: { ...rules, 'eslint/complexity': ['error', { max: 0 }], 'metrics/file': 'error' },
   }
 }
 
