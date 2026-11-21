@@ -15,6 +15,7 @@ import {
   walkSource,
 } from './lib.ts'
 import { loadProblem } from './kinds.ts'
+import { runReview, selfCheckReview } from './review.ts'
 
 const DEFAULT_MODEL = 'gpt-5.6-sol-high'
 const JUDGE_TIMEOUT_MS = 12 * 60_000
@@ -80,10 +81,12 @@ type SrcFile = { path: string; content: string }
 
 type Opts = {
   selfCheck: boolean
+  review: boolean
   runDir: string | undefined
   model: string
   concurrency: number
   fresh: boolean
+  checkpoint: number | undefined
 }
 
 function flagOnce(argv: string[], name: string): string | undefined {
@@ -99,29 +102,51 @@ function flagOnce(argv: string[], name: string): string | undefined {
 function parseArgs(argv: string[]): Opts {
   const selfCheck = argv.includes('--self-check')
   const fresh = argv.includes('--fresh')
+  const review = argv.includes('--review')
   const model = flagOnce(argv, '--model') ?? DEFAULT_MODEL
   if (/grok/i.test(model)) throw new Error('judge model must not be grok (the candidate is grok)')
   const concurrencyRaw = flagOnce(argv, '--concurrency')
   const concurrency = Number(concurrencyRaw ?? '4')
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('--concurrency must be a positive integer')
-  const positional = argv.filter(
-    (a, i) =>
-      a !== '--self-check' &&
-      a !== '--fresh' &&
-      a !== '--model' &&
-      a !== '--concurrency' &&
-      argv[i - 1] !== '--model' &&
-      argv[i - 1] !== '--concurrency',
-  )
+  const checkpointRaw = flagOnce(argv, '--checkpoint')
+  let checkpoint: number | undefined
+  if (checkpointRaw !== undefined) {
+    checkpoint = Number(checkpointRaw)
+    if (!Number.isInteger(checkpoint) || checkpoint < 1) throw new Error('--checkpoint must be a positive integer')
+  }
+  const valueFlags = new Set(['--model', '--concurrency', '--checkpoint', '--review'])
+  const positional: string[] = []
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i]
+    if (a === undefined) continue
+    if (a === '--self-check' || a === '--fresh') continue
+    if (valueFlags.has(a)) {
+      i += 1
+      continue
+    }
+    positional.push(a)
+  }
   if (selfCheck) {
     if (fresh) throw new Error('--fresh does not apply to --self-check')
-    return { selfCheck: true, runDir: undefined, model, concurrency, fresh: false }
+    if (review) throw new Error('--review does not apply to --self-check')
+    if (checkpoint !== undefined) throw new Error('--checkpoint does not apply to --self-check')
+    return { selfCheck: true, review: false, runDir: undefined, model, concurrency, fresh: false, checkpoint: undefined }
+  }
+  if (review) {
+    const runDir = flagOnce(argv, '--review')
+    if (runDir === undefined || positional.length !== 0) {
+      throw new Error(
+        'usage: node evals/judge.ts --review <runDir> [--checkpoint N] [--model gpt-5.6-sol-high] [--concurrency 4] [--fresh]',
+      )
+    }
+    return { selfCheck: false, review: true, runDir, model, concurrency, fresh, checkpoint }
   }
   const runDir = positional[0]
   if (runDir === undefined || positional.length !== 1) {
     throw new Error('usage: node evals/judge.ts <runDir> [--model gpt-5.6-sol-high] [--concurrency 4] [--fresh]')
   }
-  return { selfCheck: false, runDir, model, concurrency, fresh }
+  if (checkpoint !== undefined) throw new Error('--checkpoint only applies to --review')
+  return { selfCheck: false, review: false, runDir, model, concurrency, fresh, checkpoint: undefined }
 }
 
 async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -1097,12 +1122,39 @@ async function judgeFixtureOnce(criteria: Criterion[], known: Set<string>, expec
   return markOrigin(parsed.flags, [])
 }
 
+function selfCheckParseArgs(): void {
+  const slop = parseArgs(['evals/runs/x'])
+  if (slop.selfCheck || slop.review || slop.runDir !== 'evals/runs/x' || slop.checkpoint !== undefined) {
+    throw new Error('parseArgs: slop run')
+  }
+  const rev = parseArgs(['--review', 'evals/runs/x', '--checkpoint', '3', '--concurrency', '2'])
+  if (!rev.review || rev.runDir !== 'evals/runs/x' || rev.checkpoint !== 3 || rev.concurrency !== 2) {
+    throw new Error('parseArgs: --review')
+  }
+  let threw = false
+  try {
+    parseArgs(['--review', 'evals/runs/x', '--model', 'cursor-grok-4.6-high'])
+  } catch {
+    threw = true
+  }
+  if (!threw) throw new Error('parseArgs: grok must be rejected')
+  threw = false
+  try {
+    parseArgs(['evals/runs/x', '--checkpoint', '3'])
+  } catch {
+    threw = true
+  }
+  if (!threw) throw new Error('parseArgs: --checkpoint without --review must fail')
+}
+
 async function selfCheck(model: string): Promise<void> {
   const criteria = await loadRubric()
   const known = new Set(criteria.map(c => c.name))
+  selfCheckParseArgs()
   selfCheckParser(known)
   selfCheckSpans()
   await selfCheckFresh()
+  await selfCheckReview()
   process.stderr.write('self-check parser ok\n')
   const expected = await loadExpected()
   for (const p of expected.planted) {
@@ -1189,7 +1241,16 @@ async function judgeRun(runDir: string, model: string, concurrency: number, fres
 const argv = process.argv.slice(2)
 const opts = parseArgs(argv)
 if (opts.selfCheck) await selfCheck(opts.model)
-else {
+else if (opts.review) {
+  if (opts.runDir === undefined) throw new Error('need runDir')
+  await runReview({
+    runDir: opts.runDir,
+    model: opts.model,
+    concurrency: opts.concurrency,
+    fresh: opts.fresh,
+    checkpoint: opts.checkpoint,
+  })
+} else {
   if (opts.runDir === undefined) throw new Error('need runDir')
   await judgeRun(opts.runDir, opts.model, opts.concurrency, opts.fresh)
 }
