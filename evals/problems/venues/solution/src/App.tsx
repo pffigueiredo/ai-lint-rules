@@ -1,5 +1,5 @@
 import type { ChangeEvent } from 'react'
-import { useFavorite } from './lib/use-favorite'
+import { useFavorites, useToggleFavorite } from './lib/use-favorites'
 import { useSearchParams } from './lib/use-search-params'
 import { useVenue } from './lib/use-venue'
 import { useVenues } from './lib/use-venues'
@@ -14,8 +14,9 @@ function writeParam(params: URLSearchParams, key: string, value: string | null):
 
 function Details({ venueId }: { venueId: string }) {
   const query = useVenue(venueId)
-  const save = useFavorite()
-  const saved = save.isSuccess && save.variables === venueId
+  const favorites = useFavorites()
+  const toggle = useToggleFavorite()
+  const saved = (favorites.data?.ids ?? []).includes(venueId)
   if (query.isPending) {
     return (
       <section aria-label="Venue details">
@@ -32,26 +33,29 @@ function Details({ venueId }: { venueId: string }) {
       <h2>{venue.name}</h2>
       <p>{venue.description}</p>
       <p>{venue.hours}</p>
-      {saved ? (
-        <p>Saved</p>
-      ) : (
-        <button type="button" onClick={() => save.mutate(venueId)}>
-          Save
-        </button>
-      )}
-      {save.isError ? <div role="alert">Could not save</div> : null}
+      <button
+        type="button"
+        onClick={() => toggle.mutate({ id: venueId, next: saved ? 'unsaved' : 'saved' })}
+      >
+        {saved ? 'Unsave' : 'Save'}
+      </button>
     </section>
   )
 }
 
 export default function App() {
-  const venues = useVenues()
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
   const openOnly = params.get('open') === '1'
   const sort = params.get('sort') === 'city' ? 'city' : 'name'
   const venueId = params.get('venue')
   const selected = venueId !== null && venueId.length > 0 ? venueId : undefined
+  const venues = useVenues(q)
+  const favorites = useFavorites()
+  const ids = favorites.data?.ids ?? []
+  const fail = favorites.data?.error ?? 'none'
+  const rows = visibleVenues(venues.data?.pages.flatMap(p => p.venues) ?? [], openOnly, sort)
+  const showLoadMore = venues.hasNextPage === true && venues.isPlaceholderData !== true
 
   function onSearch(e: ChangeEvent<HTMLInputElement>): void {
     setParams(writeParam(params, 'q', e.target.value))
@@ -65,13 +69,24 @@ export default function App() {
   function onSelect(id: string): void {
     setParams(writeParam(params, 'venue', id))
   }
+  function onLoadMore(): void {
+    if (venues.isFetchingNextPage) return
+    void venues.fetchNextPage()
+  }
 
-  if (venues.isPending) return <p>Loading venues</p>
-  if (venues.isError) return <div role="alert">Could not load venues</div>
-  const rows = visibleVenues(venues.data ?? [], q, openOnly, sort)
+  if (venues.data === undefined && venues.isPending) {
+    return <p>Loading venues</p>
+  }
+
+  const listError = venues.isError && venues.isFetchNextPageError !== true
 
   return (
     <div>
+      <header>
+        <p>{`Saved: ${ids.length}`}</p>
+        {fail === 'save' ? <div role="alert">Could not save</div> : null}
+        {fail === 'unsave' ? <div role="alert">Could not unsave</div> : null}
+      </header>
       <label htmlFor="search">Search</label>
       <input id="search" value={q} onChange={onSearch} />
       <label htmlFor="open-now">Open now</label>
@@ -81,7 +96,9 @@ export default function App() {
         <option value="name">Name</option>
         <option value="city">City</option>
       </select>
-      {rows.length === 0 ? (
+      {listError ? (
+        <div role="alert">Could not load venues</div>
+      ) : rows.length === 0 ? (
         <p>No venues</p>
       ) : (
         <ul>
@@ -95,6 +112,12 @@ export default function App() {
           ))}
         </ul>
       )}
+      {listError ? null : showLoadMore ? (
+        <button type="button" onClick={onLoadMore}>
+          Load more
+        </button>
+      ) : null}
+      {venues.isFetchNextPageError ? <div role="alert">Could not load more</div> : null}
       {selected !== undefined ? <Details venueId={selected} /> : null}
     </div>
   )

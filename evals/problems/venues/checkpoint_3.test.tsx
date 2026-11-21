@@ -43,7 +43,8 @@ function stubApi(opts?: { detailStatus?: number; favoriteStatus?: number }): voi
       if (path === '/api/venues/v2' && method === 'GET') {
         return jsonResponse(DETAILS.v2, detailStatus)
       }
-      if (path === '/api/favorites' && method === 'POST') {
+      if (path === '/api/favorites' && method === 'GET') return jsonResponse({ ids: [] })
+      if (path === '/api/favorites/v1' && method === 'POST') {
         return jsonResponse({ ok: true }, favoriteStatus)
       }
       return jsonResponse({ error: 'missing' }, 404)
@@ -85,13 +86,13 @@ describe('core', () => {
     expect(await screen.findByRole('heading', { name: 'Harbor' })).toBeTruthy()
   })
 
-  it('shows Saved after a successful save', async () => {
+  it('shows Unsave after a successful save', async () => {
     stubApi()
     const user = userEvent.setup()
     renderApp(<App />)
     await user.click(await screen.findByRole('button', { name: 'Moonlight' }))
     await user.click(await screen.findByRole('button', { name: 'Save' }))
-    expect(await screen.findByText('Saved')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Unsave' })).toBeTruthy()
   })
 })
 
@@ -124,19 +125,17 @@ describe('functionality', () => {
     expect(screen.getByText('22:00-04:00')).toBeTruthy()
   })
 
-  it('posts venueId to /api/favorites', async () => {
+  it('posts to /api/favorites/v1', async () => {
     stubApi()
     const user = userEvent.setup()
     renderApp(<App />)
     await user.click(await screen.findByRole('button', { name: 'Moonlight' }))
     await user.click(await screen.findByRole('button', { name: 'Save' }))
-    await screen.findByText('Saved')
+    await screen.findByRole('button', { name: 'Unsave' })
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>
     const post = fetchMock.mock.calls.find(([input, init]) => {
-      return requestPath(input as RequestInfo | URL) === '/api/favorites' && requestMethod(init as RequestInit) === 'POST'
+      return requestPath(input as RequestInfo | URL) === '/api/favorites/v1' && requestMethod(init as RequestInit) === 'POST'
     })
     expect(post).toBeTruthy()
-    const body = post?.[1] as RequestInit | undefined
-    expect(body?.body).toBe(JSON.stringify({ venueId: 'v1' }))
   })
 })

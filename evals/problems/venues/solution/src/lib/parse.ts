@@ -10,6 +10,16 @@ export type VenueDetails = Venue & {
   hours: string
 }
 
+export type VenuePage = {
+  venues: Venue[]
+  nextPage: number | undefined
+}
+
+export type Favorites = {
+  ids: string[]
+  error: 'none' | 'save' | 'unsave'
+}
+
 export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -38,6 +48,14 @@ export function parseVenueList(body: unknown): Venue[] {
   return out
 }
 
+export function parseVenuePage(body: unknown): VenuePage {
+  const venues = parseVenueList(body)
+  if (!isRecord(body)) throw new Error('shape')
+  const raw = body['nextPage']
+  const nextPage = typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : undefined
+  return { venues, nextPage }
+}
+
 export function parseVenueDetails(body: unknown): VenueDetails {
   const venue = parseVenue(body)
   if (venue === undefined || !isRecord(body)) throw new Error('shape')
@@ -45,4 +63,17 @@ export function parseVenueDetails(body: unknown): VenueDetails {
   const hours = body['hours']
   if (typeof description !== 'string' || typeof hours !== 'string') throw new Error('shape')
   return { ...venue, description, hours }
+}
+
+export function parseFavoriteIds(body: unknown): string[] {
+  if (!isRecord(body) || !Array.isArray(body['ids'])) throw new Error('shape')
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const id of body['ids']) {
+    if (typeof id !== 'string' || id.length === 0) throw new Error('shape')
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
 }

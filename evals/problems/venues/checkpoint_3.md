@@ -30,7 +30,7 @@ When that request fails, show an element with role `alert` and the text `Could n
 
 ## Save
 
-`POST /api/favorites` with JSON body `{ "venueId": "<id>" }`.
+`POST /api/favorites/:id`.
 
-On success, replace the button with the text `Saved`.
+On success, replace the button with a button named `Unsave`.
 On failure, show an element with role `alert` and the text `Could not save`.

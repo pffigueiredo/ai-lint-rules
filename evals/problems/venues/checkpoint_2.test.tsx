@@ -10,11 +10,25 @@ const VENUES = [
   { id: 'v3', name: 'Atlas', city: 'Lisbon', open: true },
 ]
 
+function searchOf(input: RequestInfo | URL): URLSearchParams {
+  const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  return new URL(href, 'http://localhost').searchParams
+}
+
 function stubList(): void {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
-      if (requestPath(input) === '/api/venues') return jsonResponse({ venues: VENUES })
+      const path = requestPath(input)
+      if (path === '/api/favorites') return jsonResponse({ ids: [] })
+      if (path === '/api/venues') {
+        const q = (searchOf(input).get('q') ?? '').toLowerCase()
+        const venues =
+          q === ''
+            ? VENUES
+            : VENUES.filter(v => v.name.toLowerCase().includes(q) || v.city.toLowerCase().includes(q))
+        return jsonResponse({ venues })
+      }
       return jsonResponse({ error: 'missing' }, 404)
     }),
   )

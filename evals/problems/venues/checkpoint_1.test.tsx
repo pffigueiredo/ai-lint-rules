@@ -13,6 +13,7 @@ function stubList(result: unknown, status = 200): void {
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       if (requestPath(input) === '/api/venues') return jsonResponse(result, status)
+      if (requestPath(input) === '/api/favorites') return jsonResponse({ ids: [] })
       return jsonResponse({ error: 'missing' }, 404)
     }),
   )
