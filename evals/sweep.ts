@@ -6,6 +6,7 @@ import {
   type Kind,
   type Manifest,
   type WorkspaceRow,
+  EVALS_DIR,
   METRICS_PLUGIN,
   REPO_ROOT,
   capture,
@@ -19,6 +20,10 @@ import {
 import { getKind, loadProblem } from './kinds.ts'
 
 const OXLINT = join(REPO_ROOT, 'node_modules/.bin/oxlint')
+const TSC = join(REPO_ROOT, 'node_modules/.bin/tsc')
+const JSCPD = join(REPO_ROOT, 'node_modules/.bin/jscpd')
+const CHEATGUARD = join(REPO_ROOT, 'node_modules/.bin/cheatguard')
+const ANTI_SLOP_PLUGIN = join(EVALS_DIR, 'vendor/anti-slop/index.ts')
 const METRICS_CODE = 'metrics(file)'
 const METRICS_RE = /statements (\d+) moduleComplexity (\d+)/u
 const AGENT_CHECK_RE = /(check|test|spec|verify|smoke|e2e)/i
@@ -46,6 +51,30 @@ const REACT_COMPILER_RULES = [
   'react/use-memo',
   'react/no-deriving-state-in-effects',
 ] as const
+const ANTI_SLOP_RULES = [
+  'anti-slop/no-array-filter-map',
+  'anti-slop/no-reduce-accumulator-copy',
+  'anti-slop/no-chained-type-assertions',
+  'anti-slop/no-conditional-empty-object-spread',
+  'anti-slop/no-known-value-widening',
+  'anti-slop/no-module-mocking',
+  'anti-slop/no-object-parameters',
+  'anti-slop/no-reflect-apply',
+  'anti-slop/no-reflect-get',
+  'anti-slop/no-runtime-typeof',
+  'anti-slop/no-unsafe-dictionary-type',
+  'anti-slop/no-shape-in-symbol-names',
+  'anti-slop/no-unknown-parameters',
+  'anti-slop/no-unknown-returns',
+  'anti-slop/no-unknown-type-aliases',
+  'anti-slop/no-widen-then-assert',
+  'anti-slop/require-safety-comment-for-type-assertion',
+] as const
+const TSC_RE = /^(.*)\((\d+),(\d+)\): error (TS\d+): (.*)$/
+const NKZW_CONFIG = `import nkzw from '@nkzw/oxlint-config'
+import { defineConfig } from 'oxlint'
+export default defineConfig({ extends: [nkzw] })
+`
 
 export type HitCode = 'product' | 'agent-check'
 
@@ -408,10 +437,295 @@ async function fixtureComplexity(): Promise<void> {
   mustHit(result, 'metrics(module)', 'complexity module')
 }
 
+function parseTscLines(text: string): Map<string, RawHit> {
+  const out = new Map<string, RawHit>()
+  for (const line of text.split('\n')) {
+    const m = TSC_RE.exec(line.trim())
+    if (m === null) continue
+    const fileRaw = m[1]
+    const lineNo = Number(m[2])
+    const code = m[4]
+    const message = m[5]
+    if (fileRaw === undefined || code === undefined || message === undefined || !Number.isInteger(lineNo)) continue
+    const file = fileRaw.split('\\').join('/').replace(/^\.\//, '')
+    const key = `${file}:${lineNo}:${code}:${message}`
+    out.set(key, { rule: `ts-reset(${code})`, file, line: lineNo, endLine: lineNo, message })
+  }
+  return out
+}
+
+async function tscAt(ws: string, cfgPath: string): Promise<Map<string, RawHit>> {
+  const ran = await capture(TSC, ['-p', cfgPath, '--pretty', 'false'], { cwd: ws, timeoutMs: 60_000 })
+  return parseTscLines(`${ran.stdout}\n${ran.stderr}`)
+}
+
+async function runTsReset(ctx: CheckCtx): Promise<CheckResult> {
+  const base = await ctx.kind.yardstickTsconfig()
+  const withoutPath = join(ctx.clone, '.grader-tsconfig.json')
+  const withPath = join(ctx.clone, '.grader-tsconfig-reset.json')
+  const resetPath = join(ctx.clone, '.grader-reset.d.ts')
+  await writeJson(withoutPath, base)
+  await writeFile(resetPath, "import '@total-typescript/ts-reset'\n")
+  const includeRaw = base['include']
+  const include = Array.isArray(includeRaw) ? includeRaw.filter(x => typeof x === 'string') : ['src']
+  await writeJson(withPath, { ...base, include: [...include, '.grader-reset.d.ts'] })
+  try {
+    const without = await tscAt(ctx.clone, withoutPath)
+    const withReset = await tscAt(ctx.clone, withPath)
+    const hits: RawHit[] = []
+    for (const [key, hit] of withReset) {
+      if (!without.has(key)) hits.push(hit)
+    }
+    return { hits }
+  } finally {
+    await rm(withoutPath, { force: true })
+    await rm(withPath, { force: true })
+    await rm(resetPath, { force: true })
+  }
+}
+
+function jscpdPath(name: string): string {
+  const n = name.split('\\').join('/').replace(/^\.\//, '')
+  if (n.startsWith('src/')) return n
+  return `src/${n}`
+}
+
+async function runJscpd(ctx: CheckCtx): Promise<CheckResult> {
+  const outDir = await mkdtemp(join(tmpdir(), 'jscpd-'))
+  try {
+    const ran = await capture(
+      JSCPD,
+      ['--silent', '--reporters', 'json', '--output', outDir, '--min-lines', '5', '--min-tokens', '30', '--ignore', '**/node_modules/**', 'src'],
+      { cwd: ctx.clone, timeoutMs: 60_000 },
+    )
+    const reportPath = join(outDir, 'jscpd-report.json')
+    let raw: unknown
+    try {
+      raw = await readJson(reportPath)
+    } catch {
+      throw new Error(`jscpd produced no report (exit ${ran.code})\n${ran.stderr}\n${ran.stdout}`)
+    }
+    if (!isRecord(raw) || !Array.isArray(raw['duplicates'])) throw new Error('jscpd json: missing duplicates')
+    const hits: RawHit[] = []
+    for (const d of raw['duplicates']) {
+      if (!isRecord(d)) continue
+      const first = d['firstFile']
+      const second = d['secondFile']
+      if (!isRecord(first) || !isRecord(second)) continue
+      const fName = first['name']
+      const sName = second['name']
+      const fStart = first['start']
+      const fEnd = first['end']
+      const sStart = second['start']
+      const sEnd = second['end']
+      if (typeof fName !== 'string' || typeof sName !== 'string') continue
+      if (typeof fStart !== 'number' || typeof fEnd !== 'number' || typeof sStart !== 'number' || typeof sEnd !== 'number') {
+        continue
+      }
+      const msg = typeof d['fragment'] === 'string' ? d['fragment'].slice(0, 120) : 'duplicated block'
+      hits.push({ rule: 'jscpd(clone)', file: jscpdPath(fName), line: fStart, endLine: fEnd, message: msg })
+      hits.push({ rule: 'jscpd(clone)', file: jscpdPath(sName), line: sStart, endLine: sEnd, message: msg })
+    }
+    let duplicationPct = 0
+    const stats = raw['statistics']
+    if (isRecord(stats) && isRecord(stats['total']) && typeof stats['total']['percentage'] === 'number') {
+      duplicationPct = stats['total']['percentage']
+    }
+    return { hits, metrics: { duplicationPct } }
+  } finally {
+    await rm(outDir, { recursive: true, force: true })
+  }
+}
+
+function antiSlopConfig(): Record<string, unknown> {
+  const rules: Record<string, 'error'> = {}
+  for (const id of ANTI_SLOP_RULES) rules[id] = 'error'
+  return {
+    jsPlugins: [{ name: 'anti-slop', specifier: ANTI_SLOP_PLUGIN }],
+    rules,
+  }
+}
+
+async function runAntiSlop(ctx: CheckCtx): Promise<CheckResult> {
+  const hits = await runOxlint(ctx.clone, antiSlopConfig(), ctx.files)
+  return { hits }
+}
+
+async function runNkzw(ctx: CheckCtx): Promise<CheckResult> {
+  const cfgPath = join(ctx.clone, '.grader-oxlint.config.ts')
+  await writeFile(cfgPath, NKZW_CONFIG)
+  try {
+    const ran = await capture(OXLINT, ['--format', 'json', '-c', cfgPath, 'src'], {
+      cwd: ctx.clone,
+      timeoutMs: 60_000,
+    })
+    if (ran.stdout.indexOf('{') < 0) {
+      throw new Error(`nkzw oxlint produced no json (exit ${ran.code})\n${ran.stderr}\n${ran.stdout}`)
+    }
+    return { hits: parseOxlintHits(ran.stdout, ctx.clone, ctx.files) }
+  } finally {
+    await rm(cfgPath, { force: true })
+  }
+}
+
+function parseCheatguardHits(stdout: string): RawHit[] {
+  const start = stdout.indexOf('{')
+  if (start < 0) throw new Error(`cheatguard produced no json\n${stdout.slice(-1000)}`)
+  const parsed: unknown = JSON.parse(stdout.slice(start))
+  if (!isRecord(parsed) || !Array.isArray(parsed['violations'])) throw new Error('cheatguard json: missing violations')
+  const hits: RawHit[] = []
+  for (const v of parsed['violations']) {
+    if (!isRecord(v)) continue
+    const rule = v['rule']
+    const file = v['file']
+    const line = v['line']
+    const detail = v['detail']
+    if (typeof rule !== 'string' || typeof file !== 'string' || typeof detail !== 'string') continue
+    const n = typeof line === 'number' && Number.isInteger(line) && line >= 1 ? line : 1
+    hits.push({
+      rule: `cheatguard(${rule})`,
+      file: file.split('\\').join('/'),
+      line: n,
+      endLine: n,
+      message: detail,
+    })
+  }
+  return hits
+}
+
+async function runCheatguard(ctx: CheckCtx): Promise<CheckResult> {
+  const state = await mkdtemp(join(tmpdir(), 'cg-state-'))
+  try {
+    const ran = await capture(CHEATGUARD, ['check', '--base', ctx.fromRef, '--format', 'json', '--no-lint'], {
+      cwd: ctx.clone,
+      timeoutMs: 60_000,
+      env: { ...process.env, CHEATGUARD_STATE_HOME: state },
+    })
+    if (ran.code === 3) {
+      throw new Error(`cheatguard tool error\n${ran.stderr}\n${ran.stdout}`)
+    }
+    return { hits: parseCheatguardHits(ran.stdout) }
+  } finally {
+    await rm(state, { recursive: true, force: true })
+  }
+}
+
+async function gitCommit(dir: string, message: string): Promise<void> {
+  const ran = await capture(
+    'git',
+    ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=sweep', '-c', 'user.email=sweep@example.test', 'commit', '-m', message],
+    { cwd: dir, timeoutMs: 15_000 },
+  )
+  if (ran.code !== 0) throw new Error(`git commit: ${ran.stderr}`)
+}
+
+async function fixtureTsReset(): Promise<void> {
+  const src = "const x: { id: string } = JSON.parse('{}')\nexport { x }\n"
+  const result = await withFixture(
+    'cli',
+    async dir => {
+      await writeTsconfig(dir)
+      await writeFile(join(dir, 'src/a.ts'), src)
+    },
+    runTsReset,
+  )
+  mustHit(result, 'TS2322', 'ts-reset')
+}
+
+async function fixtureJscpd(): Promise<void> {
+  const block = [
+    'export function one(n: number): number {',
+    '  const a = n + 1',
+    '  const b = a * 2',
+    '  const c = b - 3',
+    '  const d = c / 4',
+    '  return d + a + b + c',
+    '}',
+    'export function two(n: number): number {',
+    '  const a = n + 1',
+    '  const b = a * 2',
+    '  const c = b - 3',
+    '  const d = c / 4',
+    '  return d + a + b + c',
+    '}',
+    '',
+  ].join('\n')
+  const result = await withFixture(
+    'cli',
+    async dir => {
+      await writeTsconfig(dir)
+      await writeFile(join(dir, 'src/dup.ts'), block)
+    },
+    runJscpd,
+  )
+  mustHit(result, 'jscpd(clone)', 'jscpd')
+  if (result.metrics?.duplicationPct === undefined || result.metrics.duplicationPct <= 0) {
+    throw new Error('jscpd: missing duplicationPct')
+  }
+}
+
+async function fixtureNkzw(): Promise<void> {
+  const result = await withFixture(
+    'cli',
+    async dir => {
+      await writeTsconfig(dir)
+      await writeFile(join(dir, 'src/a.ts'), 'export function f(x: any): any {\n  return x\n}\n')
+    },
+    runNkzw,
+  )
+  mustHit(result, 'no-explicit-any', 'nkzw-preset')
+}
+
+async function fixtureAntiSlop(): Promise<void> {
+  const result = await withFixture(
+    'cli',
+    async dir => {
+      await writeTsconfig(dir)
+      await writeFile(join(dir, 'src/a.ts'), 'const users: string[] = []\nusers.filter(Boolean).map(String)\n')
+    },
+    runAntiSlop,
+  )
+  mustHit(result, 'no-array-filter-map', 'anti-slop')
+}
+
+async function fixtureCheatguard(): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'sweep-cg-'))
+  try {
+    await mkdir(join(dir, 'src'), { recursive: true })
+    const init = await capture('git', ['-c', 'core.hooksPath=/dev/null', 'init'], { cwd: dir, timeoutMs: 15_000 })
+    if (init.code !== 0) throw new Error(`git init: ${init.stderr}`)
+    await writeFile(
+      join(dir, 'src/a.test.ts'),
+      "import { expect, test } from 'vitest'\ntest('ok', () => { expect(1 + 1).toBe(2) })\n",
+    )
+    const add = await capture('git', ['-c', 'core.hooksPath=/dev/null', 'add', 'src/a.test.ts'], {
+      cwd: dir,
+      timeoutMs: 15_000,
+    })
+    if (add.code !== 0) throw new Error(`git add: ${add.stderr}`)
+    await gitCommit(dir, 'v0')
+    await writeFile(
+      join(dir, 'src/a.test.ts'),
+      "import { expect, test } from 'vitest'\ntest.skip('ok', () => { expect(true).toBe(true) })\n",
+    )
+    const kind = getKind('cli')
+    const files = await collectFiles(dir, kind)
+    const result = await runCheatguard({ clone: dir, kind, kindId: 'cli', files, fromRef: 'HEAD', toRef: 'WORKING' })
+    mustHit(result, 'test-weakened', 'cheatguard')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 export const CHECKS: readonly CheckDef[] = [
   { id: 'tsgolint-extras', scope: 'final', run: runTsgolintExtras, fixture: fixtureTsgolintExtras },
   { id: 'react-compiler', scope: 'final', kinds: ['react'], run: runReactCompiler, fixture: fixtureReactCompiler },
   { id: 'complexity', scope: 'final', run: runComplexity, fixture: fixtureComplexity },
+  { id: 'ts-reset', scope: 'final', run: runTsReset, fixture: fixtureTsReset },
+  { id: 'jscpd', scope: 'final', run: runJscpd, fixture: fixtureJscpd },
+  { id: 'nkzw-preset', scope: 'final', run: runNkzw, fixture: fixtureNkzw },
+  { id: 'anti-slop', scope: 'final', run: runAntiSlop, fixture: fixtureAntiSlop },
+  { id: 'cheatguard', scope: 'transitions', run: runCheatguard, fixture: fixtureCheatguard },
 ]
 
 function flagOnce(argv: string[], name: string): string | undefined {
