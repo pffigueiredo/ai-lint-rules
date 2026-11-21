@@ -201,9 +201,9 @@ node evals/run.ts --problem ledger --arm plain --arm lint --reps 1 --model curso
 node evals/grade.ts evals/runs/<timestamp>
 ```
 
-Pass `--problem venues` or `--problem signup` for a React problem, `--problem tasks` for the other CLI problem, `--checkpoints K` to stop early, and `--out evals/runs/<dir>` to resume. Bundles land in `evals/runs/<timestamp>/`.
+Pass `--problem venues` or `--problem signup` for a React problem, `--problem tasks` for the other CLI problem, `--checkpoints K` to stop early, and `--out evals/runs/<dir>` to resume. Bundles land in `evals/runs/<timestamp>/`. `--timeout-min` (default 20) kills a session that runs too long. `--stall-min` (default 6) kills a session that prints no stdout for that many minutes and records `stalled`. The runner starts `cursor-agent` in its own process group and kills the group when the session ends, times out, or stalls, so leftover Vite or browser processes do not hold ports.
 
-`summary.md` opens with a head-to-head table, one row per outcome metric, with plain, lint, delta (lint minus plain), and `overlap`. Overlap is yes when the two min-max ranges overlap, so that delta is noise. The same table is repeated per checkpoint, because a gap that only appears later is the result that matters. Failed and timed-out agent calls are listed and still counted in the rates. Then compliance, then lint hits per rule.
+`summary.md` opens with a head-to-head table, one row per outcome metric, with plain, lint, delta (lint minus plain), and `overlap`. Overlap is yes when the two min-max ranges overlap, so that delta is noise. The same table is repeated per checkpoint, because a gap that only appears later is the result that matters. Failed, timed-out, or stalled agent calls are listed and still counted in the rates. Then compliance, then lint hits per rule.
 
 Solved means every check of that checkpoint passed, including earlier checkpoints as regression. Iso-solved means the new checks passed even if regression failed.
 
@@ -212,4 +212,22 @@ node evals/grade.ts --self-check
 ```
 
 That checks that each reference solution passes every hidden check and `pnpm check` under the lint arm. An empty `src/cli.ts` or an `App` that returns null fails every check. `pnpm typecheck` includes `evals/`.
+
+After `grade.ts`, score slop with an LLM judge. Grade must have written `results.jsonl` first, because flag rates are per 100 statements.
+
+```sh
+node evals/judge.ts evals/runs/<timestamp>
+```
+
+The default judge model is `gpt-5.6-sol-high`. It must not be grok, because the candidate is grok. Pass `--model` to change it and `--concurrency` (default 4) for parallel snapshots. The judge sees only `src/**` and the specs. It never sees the arm, the candidate model, or configs. Rerun the same command to resume. Snapshots already in `judge.jsonl` are skipped.
+
+`evals/rubric.jsonl` is adapted from [SlopCodeBench](https://github.com/SprocketLab/slop-code-bench) (MIT). Language-neutral criteria stay. Python examples are TypeScript. Criteria that cannot occur in a small TS CLI or React app are dropped. Local criteria cover slop these rules cannot see, and React patterns the overlay already bans. Each criterion has `source` (`scbench` or `local`) and `rule`: the overlay rule ids that already ban that slop, or `null`. `slop.md` reports flags per 100 statements twice. The second row drops criteria whose `rule` is set, because the lint arm wins those by construction.
+
+`slop.md` uses the same head-to-head table as `summary.md`. Read overlap the same way. It also lists new flags per checkpoint, counts by category, and pairwise preference. Pairwise shows both final `src/**` trees as Project A and Project B, in both orders. A win counts only when both orders agree. Disagreement is a tie. The qualitative section quotes flagged snippets so you can see what the judge meant.
+
+```sh
+node evals/judge.ts --self-check
+```
+
+That runs the judge twice on planted slop in `evals/judge-fixture/` and prints recall, clean-file flags, and run-to-run agreement.
 
