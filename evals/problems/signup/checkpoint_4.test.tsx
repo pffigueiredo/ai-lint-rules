@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './src/App'
-import { jsonResponse, renderApp, requestMethod, requestPath, setPath } from './render-app.tsx'
+import { jsonResponse, renderApp, requestMethod, requestPath, setPath, shown } from './render-app.tsx'
 
 function searchOf(input: RequestInfo | URL): URLSearchParams {
   const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
@@ -246,6 +246,6 @@ describe('functionality', () => {
     renderApp(<App />)
     expect(await screen.findByLabelText('Email')).toBeTruthy()
     expect(screen.getByLabelText('Username')).toBeTruthy()
-    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(screen.queryAllByLabelText('Password').some(shown)).toBe(false)
   })
 })

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './src/App'
-import { jsonResponse, renderApp, requestMethod, requestPath, setPath } from './render-app.tsx'
+import { jsonResponse, renderApp, requestMethod, requestPath, setPath, shown } from './render-app.tsx'
 
 function stubApi(opts?: { signupStatus?: number }): void {
   const signupStatus = opts?.signupStatus ?? 200
@@ -50,7 +50,7 @@ describe('core', () => {
     await user.type(screen.getByLabelText('Display name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Create account' }))
     expect(await screen.findByText('Account created')).toBeTruthy()
-    expect(screen.queryByLabelText('Email')).toBeNull()
+    expect(screen.queryAllByLabelText('Email').some(shown)).toBe(false)
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>
     const post = fetchMock.mock.calls.find(([input, init]) => {
       return requestPath(input as RequestInfo | URL) === '/api/signup' && requestMethod(init as RequestInit) === 'POST'

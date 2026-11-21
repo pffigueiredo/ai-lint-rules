@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './src/App'
-import { jsonResponse, renderApp, requestMethod, requestPath, setPath } from './render-app.tsx'
+import { jsonResponse, renderApp, requestMethod, requestPath, setPath, shown } from './render-app.tsx'
 
 const PROFILE = { email: 'ada@example.com', displayName: 'Ada' }
 
@@ -63,7 +63,7 @@ describe('core', () => {
     expect(await screen.findByRole('region', { name: 'Profile' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Ada' })).toBeTruthy()
     expect(screen.getByText('ada@example.com')).toBeTruthy()
-    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(screen.queryAllByLabelText('Password').some(shown)).toBe(false)
   })
 
   it('shows edit fields when mode=edit', async () => {

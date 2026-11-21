@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './src/App'
-import { jsonResponse, renderApp, requestMethod, requestPath, setPath } from './render-app.tsx'
+import { jsonResponse, renderApp, requestMethod, requestPath, setPath, shown } from './render-app.tsx'
 
 const DRAFT = {
   email: 'ada@example.com',
@@ -83,9 +83,9 @@ describe('core', () => {
     await user.type(screen.getByLabelText('Password'), 'secretsecret')
     await user.type(screen.getByLabelText('Display name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Create account' }))
-    expect(await screen.findByText('Email already used')).toBeTruthy()
+    expect((await screen.findAllByText(/Email already used/)).some(shown)).toBe(true)
     expect(screen.queryByText('Could not create account')).toBeNull()
-    expect(screen.getByLabelText('Email')).toBeTruthy()
+    expect(screen.getByLabelText(/^Email/)).toBeTruthy()
   })
 
   it('shows both 422 field messages', async () => {
@@ -99,8 +99,8 @@ describe('core', () => {
     await user.type(screen.getByLabelText('Password'), 'secretsecret')
     await user.type(screen.getByLabelText('Display name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Create account' }))
-    expect(await screen.findByText('Email already used')).toBeTruthy()
-    expect(screen.getByText('Pick another username')).toBeTruthy()
+    expect((await screen.findAllByText(/Email already used/)).some(shown)).toBe(true)
+    expect(screen.getAllByText(/Pick another username/).some(shown)).toBe(true)
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -180,7 +180,7 @@ describe('functionality', () => {
     await user.type(screen.getByLabelText('Password'), 'secretsecret')
     await user.type(screen.getByLabelText('Display name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Create account' }))
-    expect(await screen.findByText('Pick another username')).toBeTruthy()
+    expect((await screen.findAllByText(/Pick another username/)).some(shown)).toBe(true)
   })
 
   it('keeps Discard draft after a 422 response', async () => {
@@ -191,7 +191,7 @@ describe('functionality', () => {
     await user.type(screen.getByLabelText('Password'), 'secretsecret')
     await user.type(screen.getByLabelText('Display name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Create account' }))
-    expect(await screen.findByText('Email already used')).toBeTruthy()
+    expect((await screen.findAllByText(/Email already used/)).some(shown)).toBe(true)
     expect(screen.getByRole('button', { name: 'Discard draft' })).toBeTruthy()
     expect(stored()).not.toBeNull()
   })
@@ -204,8 +204,8 @@ describe('functionality', () => {
     await user.type(screen.getByLabelText('Password'), 'secretsecret')
     await user.type(screen.getByLabelText('Display name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Create account' }))
-    expect(await screen.findByText('Email already used')).toBeTruthy()
+    expect((await screen.findAllByText(/Email already used/)).some(shown)).toBe(true)
     await user.click(screen.getByRole('button', { name: 'Discard draft' }))
-    expect(screen.queryByText('Email already used')).toBeNull()
+    expect(screen.queryAllByText(/Email already used/).some(shown)).toBe(false)
   })
 })

@@ -18,6 +18,11 @@ export function requestMethod(init?: RequestInit): string {
   return (init?.method ?? 'GET').toUpperCase()
 }
 
+// Specs say "show" and "hide"; a node under `[hidden]` or `aria-hidden` is hidden even though queries still find it.
+export function shown(el: Element | null): boolean {
+  return el !== null && el.closest('[hidden], [aria-hidden="true"]') === null
+}
+
 export function setPath(path: string): void {
   window.history.replaceState({}, '', path)
 }
