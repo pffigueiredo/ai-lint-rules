@@ -118,5 +118,18 @@
     "name": "bad-priority",
     "group": "error",
     "steps": [{ "args": ["add", "x", "--priority", "nope"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "priority-missing-value",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--priority"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "seeded-tags-filter",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"a\",\"status\":\"open\",\"tags\":[\"home\"]},{\"id\":2,\"title\":\"b\",\"status\":\"open\",\"tags\":[\"work\"]}]}"
+    },
+    "steps": [{ "args": ["list", "--tag", "work"], "exitCode": 0, "stdout": "2 [open] b" }]
   }
 ]

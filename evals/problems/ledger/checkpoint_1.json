@@ -93,5 +93,33 @@
       "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"note\":\"hi\"}]"
     },
     "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 1" }]
+  },
+  {
+    "name": "two-decimal-amount",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1.5}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 1.50" }]
+  },
+  {
+    "name": "fractional-sum-prints-integer",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1.5},{\"id\":\"2\",\"account\":\"a\",\"amount\":1.5}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 3" }]
+  },
+  {
+    "name": "empty-id",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"\",\"account\":\"a\",\"amount\":1}]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "boolean-amount",
+    "group": "error",
+    "files": { "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":true}]" },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
   }
 ]

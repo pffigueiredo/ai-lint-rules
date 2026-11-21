@@ -151,5 +151,63 @@
       { "args": ["import", "ledger.json", "rows.csv"], "exitCode": 0, "stdout": "imported 1 skipped 0" },
       { "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 0" }
     ]
+  },
+  {
+    "name": "csv-empty-id",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\n,a,1,2024-01-01\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 4, "stdout": "" }]
+  },
+  {
+    "name": "import-truncated-json",
+    "group": "error",
+    "files": {
+      "ledger.json": "[",
+      "rows.csv": "id,account,amount,date\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 2, "stdout": "" }]
+  },
+  {
+    "name": "import-invalid-entry",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\"}]",
+      "rows.csv": "id,account,amount,date\n"
+    },
+    "steps": [{ "args": ["import", "ledger.json", "rows.csv"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "preserve-extra-on-skip",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":1,\"note\":\"keep\"}]",
+      "rows.csv": "id,account,amount,date\n1,alice,99,2024-01-15\n2,bob,5,2024-01-16\n"
+    },
+    "steps": [{
+      "args": ["import", "ledger.json", "rows.csv"],
+      "exitCode": 0,
+      "stdout": "imported 1 skipped 1",
+      "files": {
+        "ledger.json": [
+          { "id": "1", "account": "alice", "amount": 1, "note": "keep" },
+          { "id": "2", "account": "bob", "amount": 5, "date": "2024-01-16" }
+        ]
+      }
+    }]
+  },
+  {
+    "name": "crlf-csv",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[]",
+      "rows.csv": "id,account,amount,date\r\n1,a,1,2024-01-01\r\n"
+    },
+    "steps": [
+      { "args": ["import", "ledger.json", "rows.csv"], "exitCode": 0, "stdout": "imported 1 skipped 0" },
+      { "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 1" }
+    ]
   }
 ]

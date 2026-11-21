@@ -102,5 +102,37 @@
       "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"x\",\"status\":\"open\",\"note\":\"n\"}]}"
     },
     "steps": [{ "args": ["list"], "exitCode": 0, "stdout": "1 [open] x" }]
+  },
+  {
+    "name": "done-zero",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "0"], "exitCode": 1, "stdout": "" }
+    ]
+  },
+  {
+    "name": "done-not-a-number",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "nope"], "exitCode": 1, "stdout": "" }
+    ]
+  },
+  {
+    "name": "seeded-bad-status",
+    "group": "error",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"x\",\"status\":\"openish\"}]}"
+    },
+    "steps": [{ "args": ["list"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "seeded-duplicate-id",
+    "group": "error",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"a\",\"status\":\"open\"},{\"id\":1,\"title\":\"b\",\"status\":\"open\"}]}"
+    },
+    "steps": [{ "args": ["list"], "exitCode": 3, "stdout": "" }]
   }
 ]

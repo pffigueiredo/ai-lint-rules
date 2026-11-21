@@ -101,5 +101,26 @@
       { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
       { "args": ["stats"], "exitCode": 0, "stdout": "open 0\ndone 0" }
     ]
+  },
+  {
+    "name": "already-done-undo-stays-done",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [done] x" }
+    ]
+  },
+  {
+    "name": "stats-does-not-undo",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 1\ndone 0" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "0 tasks" }
+    ]
   }
 ]

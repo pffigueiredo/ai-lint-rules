@@ -128,5 +128,37 @@
       "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2020-01-01\"}]"
     },
     "steps": [{ "args": ["balances", "ledger.json", "--from", "2024-01-01"], "exitCode": 0, "stdout": "0 accounts" }]
+  },
+  {
+    "name": "account-from-drops-all-zero",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":1,\"date\":\"2020-01-01\"}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--account", "bob", "--from", "2024-01-01"],
+      "exitCode": 0,
+      "stdout": "bob 0"
+    }]
+  },
+  {
+    "name": "report-drops-undated",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":9},{\"id\":\"2\",\"account\":\"a\",\"amount\":1,\"date\":\"2024-01-01\"}]"
+    },
+    "steps": [{
+      "args": ["report", "ledger.json", "--month", "2024-01"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "accounts": { "a": 1 }, "total": 1 }
+    }]
+  },
+  {
+    "name": "bad-date-shape",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2024/01/01\"}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
   }
 ]
