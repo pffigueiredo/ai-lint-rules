@@ -265,8 +265,8 @@ async function main(): Promise<void> {
   for (const problem of problems) {
     const k = Math.min(opts.checkpoints ?? problem.specs.length, problem.specs.length)
     if (manifest.checkpoints === 0) manifest.checkpoints = k
-    for (const arm of opts.arms) {
-      for (let rep = 1; rep <= opts.reps; rep += 1) {
+    for (let rep = 1; rep <= opts.reps; rep += 1) {
+      for (const arm of opts.arms) {
         const id = `${problem.slug}-${arm}-r${rep}`
         let row = manifest.workspaces.find(w => w.id === id)
         if (row === undefined) {
