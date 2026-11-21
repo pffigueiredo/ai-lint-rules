@@ -180,7 +180,7 @@ function extractResult(stdout: string): string {
   throw new Error(`reviewer produced no result\n${stdout.slice(-2000)}`)
 }
 
-async function askReviewer(prompt: string, model: string): Promise<string> {
+export async function askReviewer(prompt: string, model: string): Promise<string> {
   const ws = await mkdtemp(join(tmpdir(), 'ask-'))
   try {
     const ran = await spawnCursorAgent({
@@ -672,7 +672,7 @@ function withoutContent(files: SrcFile[]): SrcFile[] {
   return files.map(f => ({ ...f, content: '' }))
 }
 
-function assertBlind(text: string, label: string): void {
+export function assertBlind(text: string, label: string): void {
   if (/\b(plain|lint-arm|lint arm)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
   if (/grok/i.test(text)) throw new Error(`${label} leaks grok`)
   if (/\b(cursor-grok|gpt-5|claude-|gemini-)/i.test(text)) throw new Error(`${label} leaks a model id`)

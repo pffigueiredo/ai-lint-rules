@@ -18,6 +18,13 @@ import {
   writeJson,
 } from './lib.ts'
 import { getKind, loadProblem } from './kinds.ts'
+import {
+  type BenefitVerdict,
+  askReviewer,
+  assertBlind,
+  benefitPrompt,
+  parseBenefitAnswer,
+} from './review.ts'
 
 const OXLINT = join(REPO_ROOT, 'node_modules/.bin/oxlint')
 const TSC = join(REPO_ROOT, 'node_modules/.bin/tsc')
@@ -29,6 +36,9 @@ const METRICS_RE = /statements (\d+) moduleComplexity (\d+)/u
 const AGENT_CHECK_RE = /(check|test|spec|verify|smoke|e2e)/i
 const MODULE_CC_MAX = 20
 const DEFAULT_CONCURRENCY = 4
+const DEFAULT_MODEL = 'gpt-5.6-sol-high'
+const SAMPLE_CAP = 10
+const CLI_STEP_TIMEOUT_MS = 8_000
 const TSGOLINT_RULES = [
   'typescript/no-unsafe-assignment',
   'typescript/no-unsafe-member-access',
@@ -143,7 +153,49 @@ type SweepOpts = {
   concurrency: number
   fresh: boolean
   checkpoint: number | undefined
+  model: string
+  review: boolean
 }
+
+export type SweepReviewRow = {
+  check: string
+  id: string
+  problem: string
+  arm: ArmId
+  rep: number
+  checkpoint: number
+  rule: string
+  file: string
+  line: number
+  endLine: number
+  message: string
+  excerpt: string
+  verdict: BenefitVerdict
+  why: string
+  input: string | null
+}
+
+export type BugReplay = {
+  check: string
+  id: string
+  problem: string
+  arm: ArmId
+  checkpoint: number
+  rule: string
+  file: string
+  line: number
+  input: string
+  exit: number
+  stdout: string
+  stderr: string
+}
+
+export const DROPPED: { id: string; why: string }[] = [
+  {
+    id: 'type-coverage',
+    why: 'type-coverage 2.31.2 needs TypeScript 7.1 createProgram or a TypeScript 6 override; this repo is on 7.0.2 and the override would rewire the project compiler.',
+  },
+]
 
 function posixRel(from: string, to: string): string {
   return relative(from, to).split('\\').join('/')
@@ -741,6 +793,9 @@ function flagOnce(argv: string[], name: string): string | undefined {
 function parseArgs(argv: string[]): SweepOpts {
   const selfCheck = argv.includes('--self-check')
   const fresh = argv.includes('--fresh')
+  const review = !argv.includes('--no-review')
+  const model = flagOnce(argv, '--model') ?? DEFAULT_MODEL
+  if (/grok/i.test(model)) throw new Error('sweep reviewer model must not be grok')
   const concurrencyRaw = flagOnce(argv, '--concurrency')
   const concurrency = Number(concurrencyRaw ?? String(DEFAULT_CONCURRENCY))
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('--concurrency must be a positive integer')
@@ -750,12 +805,12 @@ function parseArgs(argv: string[]): SweepOpts {
     checkpoint = Number(checkpointRaw)
     if (!Number.isInteger(checkpoint) || checkpoint < 1) throw new Error('--checkpoint must be a positive integer')
   }
-  const valueFlags = new Set(['--concurrency', '--checkpoint'])
+  const valueFlags = new Set(['--concurrency', '--checkpoint', '--model'])
   const positional: string[] = []
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === undefined) continue
-    if (a === '--self-check' || a === '--fresh') continue
+    if (a === '--self-check' || a === '--fresh' || a === '--no-review') continue
     if (valueFlags.has(a)) {
       i += 1
       continue
@@ -766,13 +821,23 @@ function parseArgs(argv: string[]): SweepOpts {
     if (fresh) throw new Error('--fresh does not apply to --self-check')
     if (checkpoint !== undefined) throw new Error('--checkpoint does not apply to --self-check')
     if (positional.length !== 0) throw new Error('--self-check takes no run dir')
-    return { selfCheck: true, runDir: undefined, concurrency, fresh: false, checkpoint: undefined }
+    return {
+      selfCheck: true,
+      runDir: undefined,
+      concurrency,
+      fresh: false,
+      checkpoint: undefined,
+      model,
+      review: false,
+    }
   }
   const runDir = positional[0]
   if (runDir === undefined || positional.length !== 1) {
-    throw new Error('usage: node evals/sweep.ts --self-check | node evals/sweep.ts <runDir> [--checkpoint N] [--concurrency 4] [--fresh]')
+    throw new Error(
+      'usage: node evals/sweep.ts --self-check | node evals/sweep.ts <runDir> [--checkpoint N] [--concurrency 4] [--model gpt-5.6-sol-high] [--no-review] [--fresh]',
+    )
   }
-  return { selfCheck: false, runDir, concurrency, fresh, checkpoint }
+  return { selfCheck: false, runDir, concurrency, fresh, checkpoint, model, review }
 }
 
 function sweepKey(row: Pick<SweepRow, 'id' | 'checkpoint' | 'check'>): string {
@@ -901,6 +966,477 @@ function applies(def: CheckDef, kindId: string): boolean {
   return def.kinds === undefined || def.kinds.includes(kindId)
 }
 
+function hitStub(file: string, rule: string): Hit {
+  return {
+    check: 'x',
+    rule,
+    file,
+    line: 1,
+    endLine: 1,
+    message: 'm',
+    code: 'product',
+  }
+}
+
+function stratify<T>(items: T[], key: (item: T) => string, n: number): T[] {
+  const buckets = new Map<string, T[]>()
+  for (const item of items) {
+    const k = key(item)
+    const list = buckets.get(k) ?? []
+    list.push(item)
+    buckets.set(k, list)
+  }
+  const keys = [...buckets.keys()].sort()
+  const out: T[] = []
+  while (out.length < n) {
+    let added = false
+    for (const k of keys) {
+      const list = buckets.get(k)
+      if (list === undefined || list.length === 0) continue
+      const item = list.shift()
+      if (item === undefined) continue
+      out.push(item)
+      added = true
+      if (out.length >= n) break
+    }
+    if (!added) break
+  }
+  return out
+}
+
+function productHits(row: SweepRow): Hit[] {
+  return row.hits.filter(h => h.code === 'product')
+}
+
+function agentHits(row: SweepRow): Hit[] {
+  return row.hits.filter(h => h.code === 'agent-check')
+}
+
+function per1k(n: number, statements: number): number {
+  if (statements <= 0) return 0
+  return (1000 * n) / statements
+}
+
+function stats(xs: number[]): { mean: number; min: number; max: number } {
+  if (xs.length === 0) return { mean: 0, min: 0, max: 0 }
+  let min = xs[0]
+  let max = xs[0]
+  if (min === undefined || max === undefined) return { mean: 0, min: 0, max: 0 }
+  let sum = 0
+  for (const x of xs) {
+    sum += x
+    if (x < min) min = x
+    if (x > max) max = x
+  }
+  return { mean: sum / xs.length, min, max }
+}
+
+function fmt(s: { mean: number; min: number; max: number }, digits = 2): string {
+  return `${s.mean.toFixed(digits)} (${s.min.toFixed(digits)}-${s.max.toFixed(digits)})`
+}
+
+function rangesOverlap(a: { min: number; max: number }, b: { min: number; max: number }): boolean {
+  return a.min <= b.max && b.min <= a.max
+}
+
+function excerptOf(src: string, start: number, end: number): string {
+  return src.split('\n').slice(start - 1, end).join('\n')
+}
+
+function reviewKey(row: Pick<SweepReviewRow, 'check' | 'id' | 'checkpoint' | 'file' | 'line' | 'endLine' | 'rule'>): string {
+  return `${row.check}\t${row.id}\t${row.checkpoint}\t${row.file}\t${row.line}\t${row.endLine}\t${row.rule}`
+}
+
+function parseSweepReviewRow(raw: unknown): SweepReviewRow {
+  if (!isRecord(raw)) throw new Error('sweep-review.jsonl row must be an object')
+  const { check, id, problem, arm, rep, checkpoint, rule, file, line, endLine, message, excerpt, verdict, why } = raw
+  if (
+    typeof check !== 'string' ||
+    typeof id !== 'string' ||
+    typeof problem !== 'string' ||
+    typeof rule !== 'string' ||
+    typeof file !== 'string' ||
+    typeof message !== 'string' ||
+    typeof excerpt !== 'string' ||
+    typeof why !== 'string'
+  ) {
+    throw new Error('sweep-review.jsonl missing strings')
+  }
+  if (arm !== 'plain' && arm !== 'lint') throw new Error('sweep-review.jsonl bad arm')
+  if (typeof rep !== 'number' || typeof checkpoint !== 'number' || typeof line !== 'number' || typeof endLine !== 'number') {
+    throw new Error('sweep-review.jsonl missing numbers')
+  }
+  if (verdict !== 'bug' && verdict !== 'fragile' && verdict !== 'style' && verdict !== 'noise') {
+    throw new Error(`sweep-review.jsonl bad verdict ${String(verdict)}`)
+  }
+  const inputRaw = raw['input']
+  const input = typeof inputRaw === 'string' ? inputRaw : null
+  return { check, id, problem, arm, rep, checkpoint, rule, file, line, endLine, message, excerpt, verdict, why, input }
+}
+
+function parseBugReplay(raw: unknown): BugReplay {
+  if (!isRecord(raw)) throw new Error('sweep-bugs.jsonl row must be an object')
+  const { check, id, problem, arm, checkpoint, rule, file, line, input, exit, stdout, stderr } = raw
+  if (
+    typeof check !== 'string' ||
+    typeof id !== 'string' ||
+    typeof problem !== 'string' ||
+    typeof rule !== 'string' ||
+    typeof file !== 'string' ||
+    typeof input !== 'string' ||
+    typeof stdout !== 'string' ||
+    typeof stderr !== 'string'
+  ) {
+    throw new Error('sweep-bugs.jsonl missing strings')
+  }
+  if (arm !== 'plain' && arm !== 'lint') throw new Error('sweep-bugs.jsonl bad arm')
+  if (typeof checkpoint !== 'number' || typeof line !== 'number' || typeof exit !== 'number') {
+    throw new Error('sweep-bugs.jsonl missing numbers')
+  }
+  return { check, id, problem, arm, checkpoint, rule, file, line, input, exit, stdout, stderr }
+}
+
+function sampleHits(rows: SweepRow[]): { row: SweepRow; hit: Hit }[] {
+  const out: { row: SweepRow; hit: Hit }[] = []
+  const checks = [...new Set(rows.map(r => r.check))].sort()
+  for (const check of checks) {
+    for (const arm of ['plain', 'lint'] as const) {
+      const pairs: { row: SweepRow; hit: Hit }[] = []
+      for (const row of rows) {
+        if (row.check !== check || row.arm !== arm) continue
+        for (const hit of productHits(row)) pairs.push({ row, hit })
+      }
+      pairs.sort((a, b) => {
+        const ka = `${a.row.id}\t${a.hit.file}\t${a.hit.line}\t${a.hit.rule}`
+        const kb = `${b.row.id}\t${b.hit.file}\t${b.hit.line}\t${b.hit.rule}`
+        return ka.localeCompare(kb)
+      })
+      out.push(...stratify(pairs, p => p.hit.rule, SAMPLE_CAP))
+    }
+  }
+  return out
+}
+
+async function replayCliInput(clone: string, input: string): Promise<{ exit: number; stdout: string; stderr: string }> {
+  const cwd = await mkdtemp(join(tmpdir(), 'sweep-bug-'))
+  try {
+    const args = input.trim().split(/\s+/).filter(a => a !== '')
+    const ran = await capture('node', [join(clone, 'src/cli.ts'), ...args], {
+      cwd,
+      timeoutMs: CLI_STEP_TIMEOUT_MS,
+    })
+    return { exit: ran.code, stdout: ran.stdout, stderr: ran.stderr }
+  } finally {
+    await rm(cwd, { recursive: true, force: true })
+  }
+}
+
+async function reviewSweep(opts: {
+  runDir: string
+  manifest: Manifest
+  rows: SweepRow[]
+  model: string
+  concurrency: number
+}): Promise<{ reviews: SweepReviewRow[]; bugs: BugReplay[] }> {
+  const reviewPath = join(opts.runDir, 'sweep-review.jsonl')
+  const bugPath = join(opts.runDir, 'sweep-bugs.jsonl')
+  const existing = await readJsonl(reviewPath, parseSweepReviewRow)
+  const done = new Set(existing.map(reviewKey))
+  const samples = sampleHits(opts.rows).filter(s => {
+    return !done.has(
+      reviewKey({
+        check: s.hit.check,
+        id: s.row.id,
+        checkpoint: s.row.checkpoint,
+        file: s.hit.file,
+        line: s.hit.line,
+        endLine: s.hit.endLine,
+        rule: s.hit.rule,
+      }),
+    )
+  })
+  const append = mutex()
+  const byWs = new Map<string, WorkspaceRow>()
+  for (const ws of opts.manifest.workspaces) byWs.set(ws.id, ws)
+  type Job = { sample: { row: SweepRow; hit: Hit }; ws: WorkspaceRow }
+  const jobs: Job[] = []
+  for (const sample of samples) {
+    const ws = byWs.get(sample.row.id)
+    if (ws === undefined) continue
+    jobs.push({ sample, ws })
+  }
+  await pool({
+    items: jobs,
+    concurrency: opts.concurrency,
+    kindOf: job => job.sample.row.problem,
+    kindLimit: () => undefined,
+    run: async job => {
+      const { row, hit } = job.sample
+      process.stderr.write(`sweep review ${row.check} ${row.id} ${hit.rule} ${hit.file}:${hit.line}\n`)
+      const problem = await loadProblem(row.problem)
+      const kind = getKind(problem.kind)
+      const clone = await mkdtemp(join(tmpdir(), 'sweep-rev-'))
+      try {
+        await cloneBundle(join(opts.runDir, job.ws.bundle), clone)
+        await checkoutTag(clone, row.checkpoint)
+        await kind.prepareGrade(clone)
+        const files = await collectFiles(clone, kind)
+        const src = files.get(hit.file) ?? ''
+        const fileList = [...files.entries()].map(([path, content]) => ({ path, content }))
+        const specs = problem.specs.slice(0, row.checkpoint)
+        const lintHit = { rule: hit.rule, message: hit.message, file: hit.file, start: hit.line, end: hit.endLine }
+        const prompt = benefitPrompt(specs, fileList, lintHit, src)
+        assertBlind(
+          benefitPrompt(
+            specs,
+            fileList.map(f => ({ path: f.path, content: '' })),
+            lintHit,
+            '',
+          ),
+          'sweep benefit prompt',
+        )
+        const answer = await askReviewer(prompt, opts.model)
+        const parsed = parseBenefitAnswer(answer)
+        const review: SweepReviewRow = {
+          check: row.check,
+          id: row.id,
+          problem: row.problem,
+          arm: row.arm,
+          rep: row.rep,
+          checkpoint: row.checkpoint,
+          rule: hit.rule,
+          file: hit.file,
+          line: hit.line,
+          endLine: hit.endLine,
+          message: hit.message,
+          excerpt: excerptOf(src, hit.line, hit.endLine),
+          verdict: parsed.verdict,
+          why: parsed.why,
+          input: parsed.input,
+        }
+        await append(async () => {
+          await appendFile(reviewPath, `${JSON.stringify(review)}\n`)
+        })
+        if (parsed.verdict === 'bug' && parsed.input !== null && problem.kind === 'cli') {
+          process.stderr.write(`sweep bug-replay ${row.id} ${JSON.stringify(parsed.input)}\n`)
+          const ran = await replayCliInput(clone, parsed.input)
+          const bug: BugReplay = {
+            check: row.check,
+            id: row.id,
+            problem: row.problem,
+            arm: row.arm,
+            checkpoint: row.checkpoint,
+            rule: hit.rule,
+            file: hit.file,
+            line: hit.line,
+            input: parsed.input,
+            exit: ran.exit,
+            stdout: ran.stdout,
+            stderr: ran.stderr,
+          }
+          await append(async () => {
+            await appendFile(bugPath, `${JSON.stringify(bug)}\n`)
+          })
+        }
+      } finally {
+        await rm(clone, { recursive: true, force: true })
+      }
+    },
+  })
+  const reviews = await readJsonl(reviewPath, parseSweepReviewRow)
+  const bugs = await readJsonl(bugPath, parseBugReplay)
+  return { reviews, bugs }
+}
+
+function seriesFor(
+  rows: SweepRow[],
+  check: string,
+  arm: ArmId,
+  pick: (row: SweepRow) => number,
+): { mean: number; min: number; max: number } {
+  return stats(rows.filter(r => r.check === check && r.arm === arm).map(pick))
+}
+
+function topRules(rows: SweepRow[], check: string, arm: ArmId, n: number): { rule: string; count: number }[] {
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    if (row.check !== check || row.arm !== arm) continue
+    for (const hit of productHits(row)) counts.set(hit.rule, (counts.get(hit.rule) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([rule, count]) => ({ rule, count }))
+    .sort((a, b) => b.count - a.count || a.rule.localeCompare(b.rule))
+    .slice(0, n)
+}
+
+function verdictCounts(reviews: SweepReviewRow[], check: string, arm: ArmId): Record<BenefitVerdict, number> {
+  const c: Record<BenefitVerdict, number> = { bug: 0, fragile: 0, style: 0, noise: 0 }
+  for (const r of reviews) {
+    if (r.check === check && r.arm === arm) c[r.verdict] += 1
+  }
+  return c
+}
+
+function pct(n: number, d: number): string {
+  if (d === 0) return 'n/a'
+  return `${Math.round((100 * n) / d)}%`
+}
+
+function examplesFor(
+  reviews: SweepReviewRow[],
+  check: string,
+  arm: ArmId,
+  verdict: BenefitVerdict,
+  n: number,
+): SweepReviewRow[] {
+  return reviews.filter(r => r.check === check && r.arm === arm && r.verdict === verdict).slice(0, n)
+}
+
+function exampleLine(r: SweepReviewRow): string {
+  const span = r.line === r.endLine ? `${r.file}:${r.line}` : `${r.file}:${r.line}-${r.endLine}`
+  const extra = r.input !== null ? ` input \`${r.input}\`` : ''
+  return `- \`${r.id}\` \`${span}\` ${r.verdict}${extra}: ${r.why}`
+}
+
+export function sweepMarkdown(
+  rows: SweepRow[],
+  reviews: SweepReviewRow[],
+  bugs: BugReplay[],
+  meta: { model: string },
+): string {
+  const checks = [...new Set(rows.map(r => r.check))].sort()
+  const lines: string[] = [
+    '# Sweep',
+    '',
+    'Candidate checks that neither eval arm enforced, scored on frozen snapshots.',
+    `Reviewer model \`${meta.model}\`. Up to ${SAMPLE_CAP} product hits per check per arm, stratified by rule.`,
+    'Would-have-caught is (share of reviewed hits that are `bug` or `fragile`) times product hits per 1k statements in plain.',
+    '',
+  ]
+  if (DROPPED.length > 0) {
+    lines.push('## Dropped', '')
+    for (const d of DROPPED) lines.push(`- \`${d.id}\`: ${d.why}`)
+    lines.push('')
+  }
+  for (const check of checks) {
+    const plainP = seriesFor(rows, check, 'plain', r => per1k(productHits(r).length, r.statements))
+    const lintP = seriesFor(rows, check, 'lint', r => per1k(productHits(r).length, r.statements))
+    const plainA = seriesFor(rows, check, 'plain', r => per1k(agentHits(r).length, r.statements))
+    const lintA = seriesFor(rows, check, 'lint', r => per1k(agentHits(r).length, r.statements))
+    const ov = rangesOverlap(plainP, lintP) ? 'yes' : 'no'
+    const delta = lintP.mean - plainP.mean
+    const sign = delta > 0 ? '+' : ''
+    lines.push(`## \`${check}\``, '')
+    lines.push(
+      '| metric | plain mean (min-max) | lint mean (min-max) | delta (lint - plain) | overlap |',
+      '| --- | --- | --- | --- | --- |',
+      `| product hits / 1k statements | ${fmt(plainP)} | ${fmt(lintP)} | ${sign}${delta.toFixed(2)} | ${ov} |`,
+      `| agent-check hits / 1k statements | ${fmt(plainA)} | ${fmt(lintA)} | ${(lintA.mean - plainA.mean).toFixed(2)} | ${rangesOverlap(plainA, lintA) ? 'yes' : 'no'} |`,
+    )
+    const plainDup = rows.filter(r => r.check === check && r.arm === 'plain' && r.metrics?.duplicationPct !== undefined)
+    const lintDup = rows.filter(r => r.check === check && r.arm === 'lint' && r.metrics?.duplicationPct !== undefined)
+    if (plainDup.length > 0 || lintDup.length > 0) {
+      const p = stats(plainDup.map(r => r.metrics?.duplicationPct ?? 0))
+      const l = stats(lintDup.map(r => r.metrics?.duplicationPct ?? 0))
+      lines.push(
+        `| duplicated lines % | ${fmt(p)} | ${fmt(l)} | ${(l.mean - p.mean).toFixed(2)} | ${rangesOverlap(p, l) ? 'yes' : 'no'} |`,
+      )
+    }
+    lines.push('')
+    const topP = topRules(rows, check, 'plain', 8)
+    const topL = topRules(rows, check, 'lint', 8)
+    lines.push('Top product rules (plain): ' + (topP.length === 0 ? 'none.' : topP.map(t => `\`${t.rule}\` ${t.count}`).join(', ')))
+    lines.push('Top product rules (lint): ' + (topL.length === 0 ? 'none.' : topL.map(t => `\`${t.rule}\` ${t.count}`).join(', ')))
+    lines.push('')
+    for (const arm of ['plain', 'lint'] as const) {
+      const c = verdictCounts(reviews, check, arm)
+      const n = c.bug + c.fragile + c.style + c.noise
+      lines.push(
+        `${arm} reviewer (${n}): bug ${pct(c.bug, n)}, fragile ${pct(c.fragile, n)}, style ${pct(c.style, n)}, noise ${pct(c.noise, n)}.`,
+      )
+      const bugsEx = examplesFor(reviews, check, arm, 'bug', 2)
+      const fragEx = examplesFor(reviews, check, arm, 'fragile', 2)
+      if (bugsEx.length === 0 && fragEx.length === 0) lines.push('No bug or fragile examples.')
+      else {
+        for (const r of [...bugsEx, ...fragEx]) lines.push(exampleLine(r))
+      }
+      lines.push('')
+    }
+  }
+  lines.push('## Would-have-caught ranking', '')
+  lines.push('Estimated plain-arm `bug`+`fragile` per 1k statements. Sample share times product-hit rate.', '')
+  type Rank = { check: string; score: number; share: number; rate: number; reviewed: number }
+  const ranks: Rank[] = []
+  for (const check of checks) {
+    const c = verdictCounts(reviews, check, 'plain')
+    const reviewed = c.bug + c.fragile + c.style + c.noise
+    const share = reviewed === 0 ? 0 : (c.bug + c.fragile) / reviewed
+    const rate = seriesFor(rows, check, 'plain', r => per1k(productHits(r).length, r.statements)).mean
+    ranks.push({ check, score: share * rate, share, rate, reviewed })
+  }
+  ranks.sort((a, b) => b.score - a.score || a.check.localeCompare(b.check))
+  lines.push('| check | bug+fragile / 1k (plain, estimated) | sample share | product hits / 1k | reviewed |', '| --- | --- | --- | --- | --- |')
+  for (const r of ranks) {
+    lines.push(
+      `| \`${r.check}\` | ${r.reviewed === 0 ? 'n/a' : r.score.toFixed(2)} | ${r.reviewed === 0 ? 'n/a' : `${Math.round(r.share * 100)}%`} | ${r.rate.toFixed(2)} | ${r.reviewed} |`,
+    )
+  }
+  lines.push('', '## Displacement', '')
+  lines.push(
+    'Checks neither arm enforced, where lint has more product hits per 1k statements than plain and the min-max ranges do not overlap.',
+    '',
+  )
+  const displaced: string[] = []
+  for (const check of checks) {
+    const plainP = seriesFor(rows, check, 'plain', r => per1k(productHits(r).length, r.statements))
+    const lintP = seriesFor(rows, check, 'lint', r => per1k(productHits(r).length, r.statements))
+    if (lintP.mean > plainP.mean && !rangesOverlap(plainP, lintP)) {
+      displaced.push(
+        `- \`${check}\`: lint ${fmt(lintP)} vs plain ${fmt(plainP)}`,
+      )
+    }
+  }
+  if (displaced.length === 0) lines.push('None.', '')
+  else lines.push(...displaced, '')
+  lines.push('## cheatguard', '')
+  const cg = rows.filter(r => r.check === 'cheatguard')
+  if (cg.length === 0) lines.push('No cheatguard rows.', '')
+  else {
+    const checkpoints = [...new Set(cg.map(r => r.checkpoint))].sort((a, b) => a - b)
+    lines.push('| transition | plain hits (mean) | lint hits (mean) |', '| --- | --- | --- |')
+    for (const n of checkpoints) {
+      const p = stats(cg.filter(r => r.arm === 'plain' && r.checkpoint === n).map(r => r.hits.length))
+      const l = stats(cg.filter(r => r.arm === 'lint' && r.checkpoint === n).map(r => r.hits.length))
+      const from = n === 1 ? 'v0' : `v${n - 1}`
+      lines.push(`| ${from}..v${n} | ${fmt(p, 2)} | ${fmt(l, 2)} |`)
+    }
+    lines.push('')
+    const cgHits = cg.flatMap(r => r.hits.map(h => ({ row: r, hit: h })))
+    const shown = cgHits.slice(0, 8)
+    if (shown.length === 0) lines.push('No findings.', '')
+    else {
+      lines.push('Examples', '')
+      for (const x of shown) {
+        lines.push(
+          `- \`${x.row.id}\` ${x.row.arm} v${x.row.checkpoint} \`${x.hit.rule}\` \`${x.hit.file}:${x.hit.line}\`: ${x.hit.message}`,
+        )
+      }
+      lines.push('')
+    }
+  }
+  if (bugs.length > 0) {
+    lines.push('## CLI bug inputs', '')
+    for (const b of bugs) {
+      const out = b.stdout.trim() === '' ? '(empty stdout)' : b.stdout.trim().slice(0, 200)
+      lines.push(
+        `- \`${b.id}\` \`${b.check}\` input \`${b.input}\` exit ${b.exit}: ${out}`,
+      )
+    }
+    lines.push('')
+  }
+  return `${lines.join('\n')}`
+}
+
 export async function selfCheckSweep(): Promise<void> {
   if (classifyCode('src/cli.ts') !== 'product') throw new Error('classifyCode: src/cli.ts')
   if (classifyCode('src/check.ts') !== 'agent-check') throw new Error('classifyCode: src/check.ts')
@@ -914,9 +1450,89 @@ export async function selfCheckSweep(): Promise<void> {
   }
   const args = parseArgs(['evals/runs/x'])
   if (args.runDir !== 'evals/runs/x' || args.selfCheck) throw new Error('parseArgs: run dir')
+  if (!args.review || args.model !== DEFAULT_MODEL) throw new Error('parseArgs: review defaults')
   const sc = parseArgs(['--self-check'])
   if (!sc.selfCheck) throw new Error('parseArgs: --self-check')
-  process.stderr.write(`self-check sweep ok: ${[...ids].join(', ')}\n`)
+  let threw = false
+  try {
+    parseArgs(['evals/runs/x', '--model', 'cursor-grok-4.6-high'])
+  } catch {
+    threw = true
+  }
+  if (!threw) throw new Error('parseArgs: grok must be rejected')
+  const sampled = stratify(
+    [
+      hitStub('a', 'r1'),
+      hitStub('b', 'r1'),
+      hitStub('c', 'r2'),
+      hitStub('d', 'r2'),
+      hitStub('e', 'r3'),
+    ],
+    h => h.rule,
+    4,
+  )
+  if (sampled.length !== 4) throw new Error('stratify length')
+  const rules = sampled.map(h => h.rule)
+  if (new Set(rules).size < 3) throw new Error('stratify should spread rules')
+  const md = sweepMarkdown(
+    [
+      {
+        id: 'ledger-plain-r1',
+        problem: 'ledger',
+        arm: 'plain',
+        rep: 1,
+        checkpoint: 5,
+        check: 'tsgolint-extras',
+        statements: 100,
+        hits: [
+          {
+            check: 'tsgolint-extras',
+            rule: 'typescript(no-unsafe-assignment)',
+            file: 'src/cli.ts',
+            line: 3,
+            endLine: 3,
+            message: 'Unsafe assignment',
+            code: 'product',
+          },
+        ],
+      },
+      {
+        id: 'ledger-lint-r1',
+        problem: 'ledger',
+        arm: 'lint',
+        rep: 1,
+        checkpoint: 5,
+        check: 'tsgolint-extras',
+        statements: 100,
+        hits: [],
+      },
+    ],
+    [
+      {
+        check: 'tsgolint-extras',
+        id: 'ledger-plain-r1',
+        problem: 'ledger',
+        arm: 'plain',
+        rep: 1,
+        checkpoint: 5,
+        rule: 'typescript(no-unsafe-assignment)',
+        file: 'src/cli.ts',
+        line: 3,
+        endLine: 3,
+        message: 'Unsafe assignment',
+        excerpt: 'const x: T = JSON.parse("{}")',
+        verdict: 'bug',
+        why: 'JSON.parse is unknown.',
+        input: 'balances ledger.json',
+      },
+    ],
+    [],
+    { model: DEFAULT_MODEL },
+  )
+  if (!md.includes('Would-have-caught ranking')) throw new Error('sweep.md ranking heading')
+  if (!md.includes('type-coverage')) throw new Error('sweep.md dropped type-coverage')
+  if (/grok/i.test(md)) throw new Error('sweep.md leaked grok')
+  process.stderr.write(`self-check sweep ok: ${[...ids].join(', ')}; dropped ${DROPPED.map(d => d.id).join(', ') || '(none)'}\n`)
 }
 
 async function sweepWorkspace(
@@ -993,6 +1609,9 @@ async function runSweep(opts: SweepOpts): Promise<void> {
   const manifest: Manifest = parseManifest(await readJson(join(runDir, 'manifest.json')))
   if (opts.fresh) {
     await archiveIfPresent(join(runDir, 'sweep.jsonl'), join(runDir, 'sweep.v1.jsonl'))
+    await archiveIfPresent(join(runDir, 'sweep-review.jsonl'), join(runDir, 'sweep-review.v1.jsonl'))
+    await archiveIfPresent(join(runDir, 'sweep-bugs.jsonl'), join(runDir, 'sweep-bugs.v1.jsonl'))
+    await archiveIfPresent(join(runDir, 'sweep.md'), join(runDir, 'sweep.v1.md'))
   }
   const existing = await readJsonl(join(runDir, 'sweep.jsonl'), parseSweepRow)
   const done = new Set(existing.map(sweepKey))
@@ -1010,6 +1629,27 @@ async function runSweep(opts: SweepOpts): Promise<void> {
     run: ws => sweepWorkspace(runDir, ws, opts.checkpoint, done, append),
   })
   process.stderr.write('sweep jsonl done\n')
+  const rows = await readJsonl(join(runDir, 'sweep.jsonl'), parseSweepRow)
+  let reviews: SweepReviewRow[] = []
+  let bugs: BugReplay[] = []
+  if (opts.review) {
+    const out = await reviewSweep({
+      runDir,
+      manifest,
+      rows,
+      model: opts.model,
+      concurrency: opts.concurrency,
+    })
+    reviews = out.reviews
+    bugs = out.bugs
+    process.stderr.write(`sweep review done (${reviews.length} verdicts, ${bugs.length} bug inputs)\n`)
+  } else {
+    reviews = await readJsonl(join(runDir, 'sweep-review.jsonl'), parseSweepReviewRow)
+    bugs = await readJsonl(join(runDir, 'sweep-bugs.jsonl'), parseBugReplay)
+  }
+  const md = sweepMarkdown(rows, reviews, bugs, { model: opts.model })
+  await writeFile(join(runDir, 'sweep.md'), md)
+  process.stdout.write(md)
 }
 
 process.chdir(REPO_ROOT)
