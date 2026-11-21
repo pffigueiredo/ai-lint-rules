@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, appendFile, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -83,6 +83,7 @@ type Opts = {
   runDir: string | undefined
   model: string
   concurrency: number
+  fresh: boolean
 }
 
 function flagOnce(argv: string[], name: string): string | undefined {
@@ -97,20 +98,30 @@ function flagOnce(argv: string[], name: string): string | undefined {
 
 function parseArgs(argv: string[]): Opts {
   const selfCheck = argv.includes('--self-check')
+  const fresh = argv.includes('--fresh')
   const model = flagOnce(argv, '--model') ?? DEFAULT_MODEL
   if (/grok/i.test(model)) throw new Error('judge model must not be grok (the candidate is grok)')
   const concurrencyRaw = flagOnce(argv, '--concurrency')
   const concurrency = Number(concurrencyRaw ?? '4')
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('--concurrency must be a positive integer')
   const positional = argv.filter(
-    (a, i) => a !== '--self-check' && a !== '--model' && a !== '--concurrency' && argv[i - 1] !== '--model' && argv[i - 1] !== '--concurrency',
+    (a, i) =>
+      a !== '--self-check' &&
+      a !== '--fresh' &&
+      a !== '--model' &&
+      a !== '--concurrency' &&
+      argv[i - 1] !== '--model' &&
+      argv[i - 1] !== '--concurrency',
   )
-  if (selfCheck) return { selfCheck: true, runDir: undefined, model, concurrency }
+  if (selfCheck) {
+    if (fresh) throw new Error('--fresh does not apply to --self-check')
+    return { selfCheck: true, runDir: undefined, model, concurrency, fresh: false }
+  }
   const runDir = positional[0]
   if (runDir === undefined || positional.length !== 1) {
-    throw new Error('usage: node evals/judge.ts <runDir> [--model gpt-5.6-sol-high] [--concurrency 4]')
+    throw new Error('usage: node evals/judge.ts <runDir> [--model gpt-5.6-sol-high] [--concurrency 4] [--fresh]')
   }
-  return { selfCheck: false, runDir, model, concurrency }
+  return { selfCheck: false, runDir, model, concurrency, fresh }
 }
 
 async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -753,17 +764,19 @@ function slopMarkdown(
     '',
     'Flags with confidence >= 3. `rule` criteria are ones this repo already lints, so the lint arm wins them by construction. Read the excluded-rule row as the part the overlay does not already force.',
     '',
+    'Flags per 100 statements and new-flags rows count unique spans. Flags in the same file whose line ranges overlap merge into one (highest confidence kept). Category counts are per criterion, not per span.',
+    '',
     ...HH_HEAD,
     hhRow(
       'slop flags / 100 statements',
-      armSeries(last, 'plain', s => per100(kept(s.flags).length, s.statements)),
-      armSeries(last, 'lint', s => per100(kept(s.flags).length, s.statements)),
+      armSeries(last, 'plain', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
+      armSeries(last, 'lint', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
       2,
     ),
     hhRow(
       'slop flags / 100 statements (excluding rule criteria)',
-      armSeries(last, 'plain', s => per100(excl(s).length, s.statements)),
-      armSeries(last, 'lint', s => per100(excl(s).length, s.statements)),
+      armSeries(last, 'plain', s => per100(uniqueSpans(excl(s)).length, s.statements)),
+      armSeries(last, 'lint', s => per100(uniqueSpans(excl(s)).length, s.statements)),
       2,
     ),
   ]
@@ -778,7 +791,7 @@ function slopMarkdown(
     for (const list of byId.values()) {
       const sample = list[0]
       if (sample === undefined || sample.arm !== arm) continue
-      const news = list.map(s => kept(s.flags).filter(f => f.origin === 'new').length)
+      const news = list.map(s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length)
       xs.push(stats(news).mean)
     }
     return xs
@@ -794,20 +807,20 @@ function slopMarkdown(
     lines.push(
       hhRow(
         'slop flags / 100 statements',
-        armSeries(at, 'plain', s => per100(kept(s.flags).length, s.statements)),
-        armSeries(at, 'lint', s => per100(kept(s.flags).length, s.statements)),
+        armSeries(at, 'plain', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
+        armSeries(at, 'lint', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
         2,
       ),
       hhRow(
         'slop flags / 100 statements (excluding rule criteria)',
-        armSeries(at, 'plain', s => per100(excl(s).length, s.statements)),
-        armSeries(at, 'lint', s => per100(excl(s).length, s.statements)),
+        armSeries(at, 'plain', s => per100(uniqueSpans(excl(s)).length, s.statements)),
+        armSeries(at, 'lint', s => per100(uniqueSpans(excl(s)).length, s.statements)),
         2,
       ),
       hhRow(
         'new flags',
-        armSeries(at, 'plain', s => kept(s.flags).filter(f => f.origin === 'new').length),
-        armSeries(at, 'lint', s => kept(s.flags).filter(f => f.origin === 'new').length),
+        armSeries(at, 'plain', s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length),
+        armSeries(at, 'lint', s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length),
         2,
       ),
       '',
@@ -935,6 +948,45 @@ function lineOverlap(a1: number, a2: number, b1: number, b2: number): boolean {
   return a1 <= b2 && b1 <= a2
 }
 
+function uniqueSpans<T extends { file: string; start: number; end: number; confidence: number }>(flags: T[]): T[] {
+  const byFile = new Map<string, T[]>()
+  for (const f of flags) {
+    const list = byFile.get(f.file) ?? []
+    list.push(f)
+    byFile.set(f.file, list)
+  }
+  const out: T[] = []
+  for (const list of byFile.values()) out.push(...mergeFileSpans(list))
+  return out
+}
+
+function mergeFileSpans<T extends { start: number; end: number; confidence: number }>(flags: T[]): T[] {
+  if (flags.length === 0) return []
+  const sorted = flags.slice().sort((a, b) => a.start - b.start || b.confidence - a.confidence || a.end - b.end)
+  const first = sorted[0]
+  if (first === undefined) return []
+  const merged: T[] = []
+  let cur = first
+  for (let i = 1; i < sorted.length; i += 1) {
+    const f = sorted[i]
+    if (f === undefined) continue
+    if (!lineOverlap(cur.start, cur.end, f.start, f.end)) {
+      merged.push(cur)
+      cur = f
+      continue
+    }
+    const take = f.confidence > cur.confidence ? f : cur
+    cur = {
+      ...take,
+      start: Math.min(cur.start, f.start),
+      end: Math.max(cur.end, f.end),
+      confidence: Math.max(cur.confidence, f.confidence),
+    }
+  }
+  merged.push(cur)
+  return merged
+}
+
 function jaccard(a: Set<string>, b: Set<string>): number {
   let inter = 0
   for (const x of a) if (b.has(x)) inter += 1
@@ -944,6 +996,57 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 
 function flagKey(f: { file: string; criteria: string; start: number }): string {
   return `${f.file}|${f.criteria}|${f.start}`
+}
+
+function flag(partial: Partial<Flag> & Pick<Flag, 'file' | 'start' | 'end' | 'criteria' | 'confidence'>): Flag {
+  return {
+    explanation: 'x',
+    excerpt: 'x',
+    origin: 'new',
+    ...partial,
+  }
+}
+
+function selfCheckSpans(): void {
+  const merged = uniqueSpans([
+    flag({ file: 'a.ts', start: 10, end: 12, criteria: 'lenient_parsing', confidence: 3 }),
+    flag({ file: 'a.ts', start: 10, end: 12, criteria: 'type_coercion_hiding_mismatches', confidence: 5 }),
+    flag({ file: 'a.ts', start: 11, end: 11, criteria: 'validation_mismatch', confidence: 4 }),
+    flag({ file: 'a.ts', start: 20, end: 21, criteria: 'echo_docstrings', confidence: 5 }),
+    flag({ file: 'b.ts', start: 10, end: 12, criteria: 'lenient_parsing', confidence: 5 }),
+  ])
+  if (merged.length !== 3) throw new Error(`spans: want 3 unique, got ${merged.length}`)
+  const a = merged.filter(f => f.file === 'a.ts')
+  if (a.length !== 2) throw new Error(`spans: want 2 in a.ts, got ${a.length}`)
+  const num = a.find(f => f.start <= 10 && f.end >= 12)
+  if (num === undefined || num.confidence !== 5) throw new Error('spans: overlapping Number(x) should keep confidence 5')
+  if (num.criteria !== 'type_coercion_hiding_mismatches') throw new Error('spans: keep the highest-confidence criterion')
+  const adjacent = uniqueSpans([
+    flag({ file: 'a.ts', start: 10, end: 12, criteria: 'lenient_parsing', confidence: 3 }),
+    flag({ file: 'a.ts', start: 13, end: 14, criteria: 'echo_docstrings', confidence: 3 }),
+  ])
+  if (adjacent.length !== 2) throw new Error(`spans: adjacent ranges must not merge, got ${adjacent.length}`)
+}
+
+async function selfCheckFresh(): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'fresh-'))
+  try {
+    await writeFile(join(dir, 'judge.jsonl'), 'one\n')
+    await writeFile(join(dir, 'slop.md'), 'v1body\n')
+    await archiveIfPresent(join(dir, 'judge.jsonl'), join(dir, 'judge.v1.jsonl'))
+    await archiveIfPresent(join(dir, 'slop.md'), join(dir, 'slop.v1.md'))
+    if (await exists(join(dir, 'judge.jsonl'))) throw new Error('fresh: judge.jsonl should have moved')
+    if ((await readFile(join(dir, 'judge.v1.jsonl'), 'utf8')) !== 'one\n') throw new Error('fresh: judge.v1.jsonl mismatch')
+    if ((await readFile(join(dir, 'slop.v1.md'), 'utf8')) !== 'v1body\n') throw new Error('fresh: slop.v1.md mismatch')
+    await writeFile(join(dir, 'judge.jsonl'), 'two\n')
+    await archiveIfPresent(join(dir, 'judge.jsonl'), join(dir, 'judge.v1.jsonl'))
+    if ((await readFile(join(dir, 'judge.v1.jsonl'), 'utf8')) !== 'one\n') {
+      throw new Error('fresh: second --fresh clobbered judge.v1.jsonl')
+    }
+    if (await exists(join(dir, 'judge.jsonl'))) throw new Error('fresh: second run should drop judge.jsonl')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 }
 
 function selfCheckParser(known: Set<string>): void {
@@ -998,6 +1101,8 @@ async function selfCheck(model: string): Promise<void> {
   const criteria = await loadRubric()
   const known = new Set(criteria.map(c => c.name))
   selfCheckParser(known)
+  selfCheckSpans()
+  await selfCheckFresh()
   process.stderr.write('self-check parser ok\n')
   const expected = await loadExpected()
   for (const p of expected.planted) {
@@ -1037,12 +1142,31 @@ async function selfCheck(model: string): Promise<void> {
   process.stdout.write('self-check ok\n')
 }
 
-async function judgeRun(runDir: string, model: string, concurrency: number): Promise<void> {
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function archiveIfPresent(from: string, to: string): Promise<void> {
+  if (!(await exists(from))) return
+  if (await exists(to)) await rm(from)
+  else await rename(from, to)
+}
+
+async function judgeRun(runDir: string, model: string, concurrency: number, fresh: boolean): Promise<void> {
   const gradesPath = join(runDir, 'results.jsonl')
   try {
     await readFile(gradesPath, 'utf8')
   } catch {
     throw new Error(`${gradesPath} missing; run grade.ts first`)
+  }
+  if (fresh) {
+    await archiveIfPresent(join(runDir, 'judge.jsonl'), join(runDir, 'judge.v1.jsonl'))
+    await archiveIfPresent(join(runDir, 'slop.md'), join(runDir, 'slop.v1.md'))
   }
   const criteria = await loadRubric()
   const known = new Set(criteria.map(c => c.name))
@@ -1067,5 +1191,5 @@ const opts = parseArgs(argv)
 if (opts.selfCheck) await selfCheck(opts.model)
 else {
   if (opts.runDir === undefined) throw new Error('need runDir')
-  await judgeRun(opts.runDir, opts.model, opts.concurrency)
+  await judgeRun(opts.runDir, opts.model, opts.concurrency, opts.fresh)
 }
