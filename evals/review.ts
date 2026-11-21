@@ -667,6 +667,11 @@ ${formatFiles(files)}
 `
 }
 
+// Agent code may say "plain" (`const plain = ...`), so only harness-written text is checked.
+function withoutContent(files: SrcFile[]): SrcFile[] {
+  return files.map(f => ({ ...f, content: '' }))
+}
+
 function assertBlind(text: string, label: string): void {
   if (/\b(plain|lint-arm|lint arm)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
   if (/grok/i.test(text)) throw new Error(`${label} leaks grok`)
@@ -786,7 +791,7 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
     if (job.kind === 'benefit') {
       process.stderr.write(`review benefit ${job.ws.id} ${job.hit.rule} ${job.hit.file}:${job.hit.start}\n`)
       const prompt = benefitPrompt(job.specs, job.files, job.hit, job.src)
-      assertBlind(prompt, 'benefit prompt')
+      assertBlind(benefitPrompt(job.specs, withoutContent(job.files), job.hit, ''), 'benefit prompt')
       const answer = await askReviewer(prompt, opts.model)
       const parsed = parseBenefitAnswer(answer)
       const row: BenefitRow = {
@@ -813,7 +818,7 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
     }
     process.stderr.write(`review cost ${job.ws.id}\n`)
     const prompt = costPrompt(job.specs, job.files, job.rules)
-    assertBlind(prompt, 'cost prompt')
+    assertBlind(costPrompt(job.specs, withoutContent(job.files), job.rules), 'cost prompt')
     const answer = await askReviewer(prompt, opts.model)
     const findings = parseCostAnswer(answer, new Map(job.files.map(f => [f.path, f.content])))
     const row: CostRow = {
