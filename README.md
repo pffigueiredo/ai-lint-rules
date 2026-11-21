@@ -225,9 +225,29 @@ The default judge model is `gpt-5.6-sol-high`. It must not be grok, because the 
 
 `slop.md` uses the same head-to-head table as `summary.md`. Read overlap the same way. It also lists new flags per checkpoint, counts by category, and pairwise preference. Pairwise shows both final `src/**` trees as Project A and Project B, in both orders. A win counts only when both orders agree. Disagreement is a tie. The qualitative section quotes flagged snippets so you can see what the judge meant.
 
+Review each overlay rule as a senior reviewer would:
+
+```sh
+node evals/judge.ts --review evals/runs/<timestamp>
+```
+
+That reuses the judge model (default `gpt-5.6-sol-high`, never grok), blinding, resume, and `--concurrency`. Pass `--checkpoint N` to review that checkpoint instead of the final one. `--fresh` archives `review.jsonl` and `review.md`.
+
+On the plain arm, the reviewer sees every yardstick oxlint error (the same config `grade.ts` uses, minus the metrics plugin and `eslint/complexity`), about 20 lines of context, the whole file, the rule, and the specs. Verdicts are `bug`, `fragile`, `style`, or `noise`. A `bug` must name an input a person can run.
+
+On the lint arm, the reviewer sees the overlay rules and their messages from the repo configs and `oxlint/react-bans`, not the arm name. They mark workarounds `better`, `same`, `worse`, or `bug`.
+
+`review.md` has one table per rule with plain-hit counts, `% bug` / `% fragile` / `% style` / `% noise`, lint-arm workaround counts, `% better` / `% same` / `% worse` / `% bug`, a net verdict, and two or three examples per side. The net verdict is computed:
+
+- **earns its place:** at least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.
+- **costs more than it catches:** lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.
+- **neutral:** anything else.
+
+`review.jsonl` holds every verdict. Rerun the same command to resume. Snapshots and hits already in the file are skipped.
+
 ```sh
 node evals/judge.ts --self-check
 ```
 
-That runs the judge twice on planted slop in `evals/judge-fixture/` and prints recall, clean-file flags, and run-to-run agreement.
+That runs the judge twice on planted slop in `evals/judge-fixture/` and prints recall, clean-file flags, and run-to-run agreement. It also checks the review parsers, overlay-rule catalog, and net-verdict rule.
 

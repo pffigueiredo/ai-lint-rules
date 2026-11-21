@@ -832,6 +832,187 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
   const newBenefit = jobs.filter(j => j.kind === 'benefit').length
   const newCost = jobs.filter(j => j.kind === 'cost').length
   process.stderr.write(`review done (${newBenefit} benefit, ${newCost} cost new)\n`)
+  const rows = await readJsonl(join(opts.runDir, 'review.jsonl'), parseReviewRow)
+  const md = reviewMarkdown(rows, { checkpoint: opts.checkpoint, model: opts.model })
+  await writeFile(join(opts.runDir, 'review.md'), md)
+  process.stdout.write(md)
+}
+
+export type NetVerdict = 'earns its place' | 'neutral' | 'costs more than it catches'
+
+export type BenefitCounts = { bug: number; fragile: number; style: number; noise: number }
+export type CostCounts = { better: number; same: number; worse: number; bug: number }
+
+const BENEFIT_VERDICTS: BenefitVerdict[] = ['bug', 'fragile', 'style', 'noise']
+const COST_VERDICTS: CostVerdict[] = ['bug', 'worse', 'better', 'same']
+
+export function emptyBenefitCounts(): BenefitCounts {
+  return { bug: 0, fragile: 0, style: 0, noise: 0 }
+}
+
+export function emptyCostCounts(): CostCounts {
+  return { better: 0, same: 0, worse: 0, bug: 0 }
+}
+
+export function netVerdict(benefit: BenefitCounts, cost: CostCounts): NetVerdict {
+  const plainHits = benefit.bug + benefit.fragile + benefit.style + benefit.noise
+  const workarounds = cost.better + cost.same + cost.worse + cost.bug
+  const seriousBenefit = benefit.bug + benefit.fragile
+  const costHarm = cost.worse + cost.bug
+  if (
+    seriousBenefit >= 1 &&
+    (plainHits === 0 || seriousBenefit / plainHits >= 0.15) &&
+    (workarounds === 0 || costHarm / workarounds <= 0.25)
+  ) {
+    return 'earns its place'
+  }
+  if (costHarm > seriousBenefit) return 'costs more than it catches'
+  if (plainHits > 0 && seriousBenefit === 0 && workarounds === 0) return 'costs more than it catches'
+  return 'neutral'
+}
+
+function pct(n: number, d: number): string {
+  if (d === 0) return 'n/a'
+  return `${Math.round((100 * n) / d)}%`
+}
+
+function pickExamples<T extends { verdict: string }>(rows: T[], order: readonly string[], n: number): T[] {
+  const buckets = new Map<string, T[]>()
+  for (const r of rows) {
+    const list = buckets.get(r.verdict) ?? []
+    list.push(r)
+    buckets.set(r.verdict, list)
+  }
+  const out: T[] = []
+  while (out.length < n) {
+    let added = false
+    for (const v of order) {
+      const list = buckets.get(v)
+      if (list === undefined || list.length === 0) continue
+      const item = list.shift()
+      if (item === undefined) continue
+      out.push(item)
+      added = true
+      if (out.length >= n) break
+    }
+    if (!added) break
+  }
+  return out
+}
+
+function countsBenefit(rows: BenefitRow[]): BenefitCounts {
+  const c = emptyBenefitCounts()
+  for (const r of rows) c[r.verdict] += 1
+  return c
+}
+
+function countsCost(findings: CostFinding[]): CostCounts {
+  const c = emptyCostCounts()
+  for (const f of findings) c[f.verdict] += 1
+  return c
+}
+
+type CostEx = CostFinding & { id: string }
+type RuleBucket = { benefit: BenefitRow[]; cost: CostEx[] }
+
+function bucketsByRule(rows: ReviewRow[]): Map<string, RuleBucket> {
+  const by = new Map<string, RuleBucket>()
+  const bucket = (rule: string): RuleBucket => {
+    const cur = by.get(rule)
+    if (cur !== undefined) return cur
+    const next: RuleBucket = { benefit: [], cost: [] }
+    by.set(rule, next)
+    return next
+  }
+  for (const row of rows) {
+    if (row.kind === 'benefit') bucket(row.rule).benefit.push(row)
+    else {
+      for (const f of row.findings) bucket(f.rule).cost.push({ ...f, id: row.id })
+    }
+  }
+  return by
+}
+
+function exampleLine(id: string, file: string, start: number, end: number, verdict: string, why: string, input: string | null): string {
+  const span = start === end ? `${file}:${start}` : `${file}:${start}-${end}`
+  const extra = input !== null ? ` input \`${input}\`` : ''
+  return `- \`${id}\` \`${span}\` ${verdict}${extra}: ${why}`
+}
+
+export function reviewMarkdown(
+  rows: ReviewRow[],
+  meta: { checkpoint: number | undefined; model: string },
+): string {
+  const checkpoints = [...new Set(rows.map(r => r.checkpoint))].sort((a, b) => a - b)
+  const checkpointLabel =
+    meta.checkpoint !== undefined
+      ? `Checkpoint ${meta.checkpoint}.`
+      : checkpoints.length === 1
+        ? `Checkpoint ${checkpoints[0]}.`
+        : checkpoints.length === 0
+          ? 'No snapshots reviewed.'
+          : `Checkpoints ${checkpoints.join(', ')}.`
+  const by = bucketsByRule(rows)
+  const rules = [...by.keys()].sort()
+  const benefitN = rows.filter(r => r.kind === 'benefit').length
+  const costN = rows.filter(r => r.kind === 'cost').length
+  const lines: string[] = [
+    '# Rule review',
+    '',
+    checkpointLabel,
+    `Reviewer model \`${meta.model}\`.`,
+    `${benefitN} plain-arm lint hits, ${costN} lint-arm snapshots.`,
+    '',
+    '## Net verdict',
+    '',
+    'Computed from the reviewer verdicts, not re-judged.',
+    '',
+    '- **earns its place:** at least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.',
+    '- **costs more than it catches:** lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.',
+    '- **neutral:** anything else.',
+    '',
+  ]
+  if (rules.length === 0) {
+    lines.push('No verdicts yet.', '')
+    return `${lines.join('\n')}`
+  }
+  for (const rule of rules) {
+    const bucket = by.get(rule)
+    if (bucket === undefined) continue
+    const b = countsBenefit(bucket.benefit)
+    const c = countsCost(bucket.cost)
+    const plain = bucket.benefit.length
+    const work = bucket.cost.length
+    const net = netVerdict(b, c)
+    lines.push(
+      `## \`${rule}\``,
+      '',
+      '| plain hits | % bug | % fragile | % style | % noise | workarounds | % better | % same | % worse | % bug | net |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      `| ${plain} | ${pct(b.bug, plain)} | ${pct(b.fragile, plain)} | ${pct(b.style, plain)} | ${pct(b.noise, plain)} | ${work} | ${pct(c.better, work)} | ${pct(c.same, work)} | ${pct(c.worse, work)} | ${pct(c.bug, work)} | ${net} |`,
+      '',
+      'Plain',
+      '',
+    )
+    const bEx = pickExamples(bucket.benefit, BENEFIT_VERDICTS, 3)
+    if (bEx.length === 0) lines.push('None.', '')
+    else {
+      for (const r of bEx) {
+        lines.push(exampleLine(r.id, r.file, r.start, r.end, r.verdict, r.why, r.input))
+      }
+      lines.push('')
+    }
+    lines.push('Lint-arm', '')
+    const cEx = pickExamples(bucket.cost, COST_VERDICTS, 3)
+    if (cEx.length === 0) lines.push('None.', '')
+    else {
+      for (const f of cEx) {
+        lines.push(exampleLine(f.id, f.file, f.start, f.end, f.verdict, f.why, f.input))
+      }
+      lines.push('')
+    }
+  }
+  return `${lines.join('\n')}`
 }
 
 function sampleHitJson(): string {
@@ -963,6 +1144,41 @@ export async function selfCheckReview(): Promise<void> {
   if (normalizeRule('typescript/no-non-null-assertion') !== 'typescript(no-non-null-assertion)') {
     throw new Error('normalizeRule slash')
   }
+
+  const earns = netVerdict({ bug: 0, fragile: 3, style: 0, noise: 13 }, { better: 4, same: 2, worse: 0, bug: 0 })
+  if (earns !== 'earns its place') throw new Error(`netVerdict fragile share: ${earns}`)
+  const nags = netVerdict({ bug: 0, fragile: 0, style: 0, noise: 41 }, { better: 0, same: 0, worse: 0, bug: 0 })
+  if (nags !== 'costs more than it catches') throw new Error(`netVerdict nags: ${nags}`)
+  const harm = netVerdict({ bug: 0, fragile: 0, style: 1, noise: 8 }, { better: 0, same: 0, worse: 0, bug: 2 })
+  if (harm !== 'costs more than it catches') throw new Error(`netVerdict lint bugs: ${harm}`)
+  const mixed = netVerdict({ bug: 0, fragile: 0, style: 0, noise: 41 }, { better: 0, same: 6, worse: 0, bug: 0 })
+  if (mixed !== 'neutral') throw new Error(`netVerdict same wrappers: ${mixed}`)
+
+  const md = reviewMarkdown(
+    [
+      {
+        kind: 'benefit',
+        id: 'ledger-plain-r1',
+        problem: 'ledger',
+        arm: 'plain',
+        rep: 1,
+        checkpoint: 3,
+        rule: 'eslint(no-console)',
+        message: 'Unexpected console statement.',
+        file: 'src/cli.ts',
+        start: 2,
+        end: 2,
+        excerpt: 'console.log(x)',
+        verdict: 'noise',
+        why: 'CLI output.',
+        input: null,
+      },
+    ],
+    { checkpoint: 3, model: 'gpt-5.6-sol-high' },
+  )
+  if (!md.includes('costs more than it catches')) throw new Error('review.md net verdict missing')
+  if (!md.includes('Checkpoint 3.')) throw new Error('review.md checkpoint')
+  if (/grok/i.test(md)) throw new Error('review.md leaked grok')
 
   const dir = await mkdtemp(join(tmpdir(), 'rev-fresh-'))
   try {
