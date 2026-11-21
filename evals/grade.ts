@@ -721,6 +721,9 @@ type WsSummary = {
   ranCheckPct: number
   lintByRule: Record<string, number>
   lintPerLocByRule: Record<string, number>
+  unusedFiles: number
+  unusedExports: number
+  unusedDeps: number
 }
 
 function workspaceSummaries(rows: Row[]): WsSummary[] {
@@ -759,6 +762,9 @@ function workspaceSummaries(rows: Row[]): WsSummary[] {
       ranCheckPct: (100 * list.filter(r => r.ranCheck).length) / list.length,
       lintByRule: last.lintByRule,
       lintPerLocByRule,
+      unusedFiles: last.unusedFiles,
+      unusedExports: last.unusedExports,
+      unusedDeps: last.unusedDeps,
     })
   }
   return out
@@ -797,6 +803,9 @@ function outcomeTable(plain: WsSummary[], lint: WsSummary[]): string[] {
     hhRow('statements', p(s => s.statements), l(s => s.statements), 1),
     hhRow('delta statements %', p(s => s.deltaStatementsPct), l(s => s.deltaStatementsPct), 1),
     hhRow('churn ratio', p(s => s.churn), l(s => s.churn), 3),
+    hhRow('unused files', p(s => s.unusedFiles), l(s => s.unusedFiles), 1),
+    hhRow('unused exports', p(s => s.unusedExports), l(s => s.unusedExports), 1),
+    hhRow('unused deps', p(s => s.unusedDeps), l(s => s.unusedDeps), 1),
     hhRow('tokens', p(s => s.tokens), l(s => s.tokens), 0),
     hhRow('duration ms', p(s => s.durationMs), l(s => s.durationMs), 0),
   ]
@@ -827,6 +836,9 @@ function rowAsSummary(row: Row): WsSummary {
     ranCheckPct: row.ranCheck ? 100 : 0,
     lintByRule: row.lintByRule,
     lintPerLocByRule,
+    unusedFiles: row.unusedFiles,
+    unusedExports: row.unusedExports,
+    unusedDeps: row.unusedDeps,
   }
 }
 
