@@ -1,0 +1,106 @@
+[
+  {
+    "name": "add-then-list",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "buy", "milk"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] buy milk" }
+    ]
+  },
+  {
+    "name": "two-adds",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "one"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "two"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] one\n2 [open] two" }
+    ]
+  },
+  {
+    "name": "done-then-list",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [done] x" }
+    ]
+  },
+  {
+    "name": "empty-list",
+    "group": "core",
+    "steps": [{ "args": ["list"], "exitCode": 0, "stdout": "0 tasks" }]
+  },
+  {
+    "name": "done-unknown",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "9"], "exitCode": 1, "stdout": "" }
+    ]
+  },
+  {
+    "name": "add-missing-title",
+    "group": "error",
+    "steps": [{ "args": ["add"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "done-missing-id",
+    "group": "error",
+    "steps": [{ "args": ["done"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "bad-json",
+    "group": "error",
+    "files": { "tasks.json": "{" },
+    "steps": [{ "args": ["list"], "exitCode": 2, "stdout": "" }]
+  },
+  {
+    "name": "not-an-object",
+    "group": "error",
+    "files": { "tasks.json": "[]" },
+    "steps": [{ "args": ["list"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "seeded-list",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":2,\"title\":\"later\",\"status\":\"open\"},{\"id\":1,\"title\":\"first\",\"status\":\"done\"}]}"
+    },
+    "steps": [{ "args": ["list"], "exitCode": 0, "stdout": "1 [done] first\n2 [open] later" }]
+  },
+  {
+    "name": "seeded-done",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":4,\"title\":\"keep\",\"status\":\"open\"}]}"
+    },
+    "steps": [
+      { "args": ["done", "4"], "exitCode": 0, "stdout": "done 4" },
+      { "args": ["list"], "exitCode": 0, "stdout": "4 [done] keep" }
+    ]
+  },
+  {
+    "name": "already-done",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"x\",\"status\":\"done\"}]}"
+    },
+    "steps": [{ "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" }]
+  },
+  {
+    "name": "next-id-from-max",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":7,\"title\":\"old\",\"status\":\"open\"}]}"
+    },
+    "steps": [{ "args": ["add", "new"], "exitCode": 0, "stdout": "added 8" }]
+  },
+  {
+    "name": "extra-field-ignored",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"x\",\"status\":\"open\",\"note\":\"n\"}]}"
+    },
+    "steps": [{ "args": ["list"], "exitCode": 0, "stdout": "1 [open] x" }]
+  }
+]
