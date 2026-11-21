@@ -195,4 +195,17 @@ describe('functionality', () => {
     expect(screen.getByRole('button', { name: 'Discard draft' })).toBeTruthy()
     expect(stored()).not.toBeNull()
   })
+
+  it('hides 422 field messages after Discard draft', async () => {
+    stubApi({ signupStatus: 422, signupBody: { errors: { email: 'Email already used' } } })
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.type(await screen.findByLabelText('Email'), 'ada@example.com')
+    await user.type(screen.getByLabelText('Password'), 'secretsecret')
+    await user.type(screen.getByLabelText('Display name'), 'Ada')
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByText('Email already used')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Discard draft' }))
+    expect(screen.queryByText('Email already used')).toBeNull()
+  })
 })

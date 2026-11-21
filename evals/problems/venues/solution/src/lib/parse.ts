@@ -18,6 +18,7 @@ export type VenuePage = {
 export type Favorites = {
   ids: string[]
   error: 'none' | 'save' | 'unsave'
+  errorFor: string | undefined
 }
 
 export function isRecord(v: unknown): v is Record<string, unknown> {

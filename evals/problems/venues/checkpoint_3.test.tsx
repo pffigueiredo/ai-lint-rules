@@ -121,10 +121,9 @@ describe('functionality', () => {
     setPath('/?venue=v1')
     stubApi()
     renderApp(<App />)
-    const region = await screen.findByRole('region', { name: 'Venue details' })
-    await waitFor(() => {
-      expect(region.textContent ?? '').toContain('Rooftop in Bairro Alto.')
-    })
+    expect(await screen.findByRole('heading', { name: 'Moonlight' })).toBeTruthy()
+    const region = screen.getByRole('region', { name: 'Venue details' })
+    expect(region.textContent ?? '').toContain('Rooftop in Bairro Alto.')
     expect(region.textContent ?? '').toContain('22:00-04:00')
   })
 

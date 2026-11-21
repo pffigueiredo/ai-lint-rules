@@ -286,6 +286,16 @@ describe('functionality', () => {
     expect(await screen.findByText('No venues')).toBeTruthy()
   })
 
+  it('shows No venues when Open now hides every loaded venue', async () => {
+    stubPaged(() => ({ body: { venues: [HARBOR], nextPage: null } }))
+    const user = userEvent.setup()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Harbor' })).toBeTruthy()
+    await user.click(screen.getByLabelText('Open now'))
+    expect(await screen.findByText('No venues')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+  })
+
   it('hides Load more while a newer Search is in flight', async () => {
     const next = deferred()
     stubPaged((q, page) => {

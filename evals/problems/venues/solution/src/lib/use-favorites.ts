@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef } from 'react'
 import { parseFavoriteIds, type Favorites } from './parse'
 
-async function fetchFavorites(): Promise<Favorites> {
-  const res = await fetch('/api/favorites')
+async function fetchFavorites(signal: AbortSignal): Promise<Favorites> {
+  const res = await fetch('/api/favorites', { signal })
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
   if (!res.ok) throw new Error('load')
-  return { ids: parseFavoriteIds(await res.json()), error: 'none' }
+  return { ids: parseFavoriteIds(await res.json()), error: 'none', errorFor: undefined }
 }
 
 async function sendFavorite(id: string, next: 'saved' | 'unsaved'): Promise<void> {
@@ -16,7 +17,7 @@ async function sendFavorite(id: string, next: 'saved' | 'unsaved'): Promise<void
 export function useFavorites() {
   return useQuery({
     queryKey: ['favorites'],
-    queryFn: fetchFavorites,
+    queryFn: ctx => fetchFavorites(ctx.signal),
   })
 }
 
@@ -36,7 +37,7 @@ export function useToggleFavorite() {
       const ids = new Set(prev?.ids ?? [])
       if (vars.next === 'saved') ids.add(vars.id)
       else ids.delete(vars.id)
-      client.setQueryData<Favorites>(['favorites'], { ids: [...ids], error: 'none' })
+      client.setQueryData<Favorites>(['favorites'], { ids: [...ids], error: 'none', errorFor: undefined })
       return { prev, seq: n }
     },
     onError: (_err, vars, ctx) => {
@@ -44,6 +45,7 @@ export function useToggleFavorite() {
       client.setQueryData<Favorites>(['favorites'], {
         ids: ctx.prev?.ids ?? [],
         error: vars.next === 'saved' ? 'save' : 'unsave',
+        errorFor: vars.id,
       })
     },
   })

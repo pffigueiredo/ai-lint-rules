@@ -10,7 +10,7 @@ On load, if that key is present and the JSON has those four string fields, fill 
 
 If the key is missing, or the value is not that JSON shape, leave the fields empty and do not show Discard draft.
 
-When a draft is stored, show a button named `Discard draft`. A click removes `signup-draft`, clears the four fields, and hides the button.
+When a draft is stored, show a button named `Discard draft`. A click removes `signup-draft`, clears the four fields, hides the button, and hides any 422 field messages.
 
 A successful create removes `signup-draft`.
 

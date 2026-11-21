@@ -1,6 +1,6 @@
 # Server search and paging
 
-Search now asks the server. Open now and Sort still apply to the venues already on the page.
+Search now asks the server. Open now and Sort still apply to the venues already on the page. If none remain, show `No venues` and no list items.
 
 ## List request
 

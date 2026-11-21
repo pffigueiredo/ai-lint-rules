@@ -17,6 +17,7 @@ function Details({ venueId }: { venueId: string }) {
   const favorites = useFavorites()
   const toggle = useToggleFavorite()
   const saved = (favorites.data?.ids ?? []).includes(venueId)
+  const fail = favorites.data?.errorFor === venueId ? favorites.data.error : 'none'
   if (query.isPending) {
     return (
       <section aria-label="Venue details">
@@ -39,6 +40,8 @@ function Details({ venueId }: { venueId: string }) {
       >
         {saved ? 'Unsave' : 'Save'}
       </button>
+      {fail === 'save' ? <div role="alert">Could not save</div> : null}
+      {fail === 'unsave' ? <div role="alert">Could not unsave</div> : null}
     </section>
   )
 }
@@ -53,7 +56,6 @@ export default function App() {
   const venues = useVenues(q)
   const favorites = useFavorites()
   const ids = favorites.data?.ids ?? []
-  const fail = favorites.data?.error ?? 'none'
   const rows = visibleVenues(venues.data?.pages.flatMap(p => p.venues) ?? [], openOnly, sort)
   const showLoadMore = venues.hasNextPage === true && venues.isPlaceholderData !== true
 
@@ -84,8 +86,6 @@ export default function App() {
     <div>
       <header>
         <p>{`Saved: ${ids.length}`}</p>
-        {fail === 'save' ? <div role="alert">Could not save</div> : null}
-        {fail === 'unsave' ? <div role="alert">Could not unsave</div> : null}
       </header>
       <label htmlFor="search">Search</label>
       <input id="search" value={q} onChange={onSearch} />

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './src/App'
 import { jsonResponse, renderApp, requestMethod, requestPath, setPath } from './render-app.tsx'
@@ -32,6 +32,7 @@ function deferred(): { promise: Promise<Response>; resolve: (value: Response) =>
 function stubFavs(opts: {
   ids?: string[]
   favsStatus?: number
+  favs?: Promise<Response>
   post?: Promise<Response> | number
   del?: Promise<Response> | number
 }): void {
@@ -49,7 +50,9 @@ function stubFavs(opts: {
       }
       if (path === '/api/venues/v1' && method === 'GET') return jsonResponse(MOONLIGHT)
       if (path === '/api/venues/v2' && method === 'GET') return jsonResponse(HARBOR)
-      if (path === '/api/favorites' && method === 'GET') return jsonResponse({ ids }, favsStatus)
+      if (path === '/api/favorites' && method === 'GET') {
+        return opts.favs ?? jsonResponse({ ids }, favsStatus)
+      }
       if (path === '/api/favorites/v1' && method === 'POST') {
         return typeof post === 'number' ? jsonResponse({ ok: true }, post) : post
       }
@@ -255,5 +258,36 @@ describe('functionality', () => {
     renderApp(<App />)
     expect(await screen.findByText('Saved: 1')).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'Unsave' })).toBeTruthy()
+  })
+
+  it('hides the save alert when another venue opens', async () => {
+    stubFavs({ post: 500 })
+    const user = userEvent.setup()
+    setPath('/?venue=v1')
+    renderApp(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Could not save')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Harbor' }))
+    expect(await screen.findByRole('heading', { name: 'Harbor' })).toBeTruthy()
+    expect(screen.queryByText('Could not save')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps an optimistic save when GET /api/favorites returns later empty', async () => {
+    const favs = deferred()
+    stubFavs({ favs: favs.promise })
+    const user = userEvent.setup()
+    setPath('/?venue=v1')
+    renderApp(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Save' }))
+    expect(screen.getByRole('button', { name: 'Unsave' })).toBeTruthy()
+    expect(screen.getByText('Saved: 1')).toBeTruthy()
+    favs.resolve(jsonResponse({ ids: [] }))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: 'Unsave' })).toBeTruthy()
+    expect(screen.getByText('Saved: 1')).toBeTruthy()
   })
 })

@@ -32,6 +32,12 @@ A click on Unsave becomes `Save` and subtracts one from the header while `DELETE
 
 ## Failure
 
+The alert belongs to the venue that was just toggled. Opening another venue hides it.
+
+If `GET /api/favorites` returns after the user has already toggled, do not replace the button or the header with that older list.
+
+Example. GET is still in flight and the header is `Saved: 0`. The user clicks Save on Moonlight. The header is `Saved: 1` and the button is `Unsave`. Then GET returns `{ "ids": [] }`. The header stays `Saved: 1` and the button stays `Unsave`.
+
 When the request for a click fails, put the button and the header back to what they were before that click.
 
 A failed POST shows an element with role `alert` and the text `Could not save`.

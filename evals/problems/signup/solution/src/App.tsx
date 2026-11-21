@@ -105,7 +105,13 @@ function SignupForm() {
         </button>
       ) : null}
       {draftState.stored === 'yes' ? (
-        <button type="button" onClick={draftState.discard}>
+        <button
+          type="button"
+          onClick={() => {
+            draftState.discard()
+            signup.reset()
+          }}
+        >
           Discard draft
         </button>
       ) : null}
