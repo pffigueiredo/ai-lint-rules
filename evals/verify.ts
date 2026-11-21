@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   type Bounds,
   type CheckResult,
@@ -336,7 +336,7 @@ function parseRunArgs(argv: string[]): { runDir: string; checkpoint: number; bou
       continue
     }
     if (a.startsWith('--') || runDir !== undefined) usage()
-    runDir = a
+    runDir = resolve(a)
   }
   if (runDir === undefined) usage()
   return { runDir, checkpoint, bounds: { seed, numRuns, maxCommands: MAX_COMMANDS } }
