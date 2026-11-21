@@ -11,6 +11,7 @@ import {
   METRICS_PLUGIN,
   REPO_ROOT,
   capture,
+  isArmId,
   isRecord,
   listCheckpointTags,
   parseManifest,
@@ -26,6 +27,18 @@ import {
   benefitPrompt,
   parseBenefitAnswer,
 } from './review.ts'
+import {
+  armsPresent,
+  fmt,
+  hhHead,
+  otherArms,
+  rangesOverlap,
+  resolveBaseline,
+  sectionTitle,
+  selfCheckCompare,
+  stats,
+  uniqueArms,
+} from './compare.ts'
 
 const OXLINT = join(REPO_ROOT, 'node_modules/.bin/oxlint')
 const TSC = join(REPO_ROOT, 'node_modules/.bin/tsc')
@@ -162,6 +175,7 @@ type SweepOpts = {
   checkpoint: number | undefined
   model: string
   review: boolean
+  baseline: string | undefined
 }
 
 export type SweepReviewRow = {
@@ -813,7 +827,8 @@ function parseArgs(argv: string[]): SweepOpts {
     checkpoint = Number(checkpointRaw)
     if (!Number.isInteger(checkpoint) || checkpoint < 1) throw new Error('--checkpoint must be a positive integer')
   }
-  const valueFlags = new Set(['--concurrency', '--checkpoint', '--model'])
+  const baseline = flagOnce(argv, '--baseline')
+  const valueFlags = new Set(['--concurrency', '--checkpoint', '--model', '--baseline'])
   const positional: string[] = []
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
@@ -829,6 +844,7 @@ function parseArgs(argv: string[]): SweepOpts {
     if (fresh) throw new Error('--fresh does not apply to --self-check')
     if (checkpoint !== undefined) throw new Error('--checkpoint does not apply to --self-check')
     if (positional.length !== 0) throw new Error('--self-check takes no run dir')
+    if (baseline !== undefined) throw new Error('--baseline does not apply to --self-check')
     return {
       selfCheck: true,
       runDir: undefined,
@@ -837,15 +853,16 @@ function parseArgs(argv: string[]): SweepOpts {
       checkpoint: undefined,
       model,
       review: false,
+      baseline: undefined,
     }
   }
   const runDir = positional[0]
   if (runDir === undefined || positional.length !== 1) {
     throw new Error(
-      'usage: node evals/sweep.ts --self-check | node evals/sweep.ts <runDir> [--checkpoint N] [--concurrency 4] [--model gpt-5.6-sol-high] [--no-review] [--fresh]',
+      'usage: node evals/sweep.ts --self-check | node evals/sweep.ts <runDir> [--baseline plain] [--checkpoint N] [--concurrency 4] [--model gpt-5.6-sol-high] [--no-review] [--fresh]',
     )
   }
-  return { selfCheck: false, runDir, concurrency, fresh, checkpoint, model, review }
+  return { selfCheck: false, runDir, concurrency, fresh, checkpoint, model, review, baseline }
 }
 
 function sweepKey(row: Pick<SweepRow, 'id' | 'checkpoint' | 'check'>): string {
@@ -858,7 +875,7 @@ function parseSweepRow(raw: unknown): SweepRow {
   if (typeof id !== 'string' || typeof problem !== 'string' || typeof check !== 'string') {
     throw new Error('sweep.jsonl row missing strings')
   }
-  if (arm !== 'plain' && arm !== 'lint') throw new Error(`sweep.jsonl bad arm ${String(arm)}`)
+  if (typeof arm !== 'string' || !isArmId(arm)) throw new Error(`sweep.jsonl bad arm ${String(arm)}`)
   if (typeof rep !== 'number' || typeof checkpoint !== 'number' || typeof statements !== 'number') {
     throw new Error('sweep.jsonl row missing numbers')
   }
@@ -1025,28 +1042,6 @@ function per1k(n: number, statements: number): number {
   return (1000 * n) / statements
 }
 
-function stats(xs: number[]): { mean: number; min: number; max: number } {
-  if (xs.length === 0) return { mean: 0, min: 0, max: 0 }
-  let min = xs[0]
-  let max = xs[0]
-  if (min === undefined || max === undefined) return { mean: 0, min: 0, max: 0 }
-  let sum = 0
-  for (const x of xs) {
-    sum += x
-    if (x < min) min = x
-    if (x > max) max = x
-  }
-  return { mean: sum / xs.length, min, max }
-}
-
-function fmt(s: { mean: number; min: number; max: number }, digits = 2): string {
-  return `${s.mean.toFixed(digits)} (${s.min.toFixed(digits)}-${s.max.toFixed(digits)})`
-}
-
-function rangesOverlap(a: { min: number; max: number }, b: { min: number; max: number }): boolean {
-  return a.min <= b.max && b.min <= a.max
-}
-
 function excerptOf(src: string, start: number, end: number): string {
   return src.split('\n').slice(start - 1, end).join('\n')
 }
@@ -1070,7 +1065,7 @@ function parseSweepReviewRow(raw: unknown): SweepReviewRow {
   ) {
     throw new Error('sweep-review.jsonl missing strings')
   }
-  if (arm !== 'plain' && arm !== 'lint') throw new Error('sweep-review.jsonl bad arm')
+  if (typeof arm !== 'string' || !isArmId(arm)) throw new Error('sweep-review.jsonl bad arm')
   if (typeof rep !== 'number' || typeof checkpoint !== 'number' || typeof line !== 'number' || typeof endLine !== 'number') {
     throw new Error('sweep-review.jsonl missing numbers')
   }
@@ -1097,7 +1092,7 @@ function parseBugReplay(raw: unknown): BugReplay {
   ) {
     throw new Error('sweep-bugs.jsonl missing strings')
   }
-  if (arm !== 'plain' && arm !== 'lint') throw new Error('sweep-bugs.jsonl bad arm')
+  if (typeof arm !== 'string' || !isArmId(arm)) throw new Error('sweep-bugs.jsonl bad arm')
   if (typeof checkpoint !== 'number' || typeof line !== 'number' || typeof exit !== 'number') {
     throw new Error('sweep-bugs.jsonl missing numbers')
   }
@@ -1107,8 +1102,9 @@ function parseBugReplay(raw: unknown): BugReplay {
 function sampleHits(rows: SweepRow[]): { row: SweepRow; hit: Hit }[] {
   const out: { row: SweepRow; hit: Hit }[] = []
   const checks = [...new Set(rows.map(r => r.check))].sort()
+  const arms = armsPresent(rows)
   for (const check of checks) {
-    for (const arm of ['plain', 'lint'] as const) {
+    for (const arm of arms) {
       const pairs: { row: SweepRow; hit: Hit }[] = []
       for (const row of rows) {
         if (row.check !== check || row.arm !== arm) continue
@@ -1306,19 +1302,79 @@ function exampleLine(r: SweepReviewRow): string {
   return `- \`${r.id}\` \`${span}\` ${r.verdict}${extra}: ${r.why}`
 }
 
+function sweepCheck(
+  rows: SweepRow[],
+  reviews: SweepReviewRow[],
+  check: string,
+  baseline: ArmId,
+  other: ArmId,
+): string[] {
+  const aP = seriesFor(rows, check, baseline, r => per1k(productHits(r).length, r.statements))
+  const bP = seriesFor(rows, check, other, r => per1k(productHits(r).length, r.statements))
+  const aA = seriesFor(rows, check, baseline, r => per1k(agentHits(r).length, r.statements))
+  const bA = seriesFor(rows, check, other, r => per1k(agentHits(r).length, r.statements))
+  const ov = rangesOverlap(aP, bP) ? 'yes' : 'no'
+  const delta = bP.mean - aP.mean
+  const sign = delta > 0 ? '+' : ''
+  const lines: string[] = [
+    ...hhHead(baseline, other),
+    `| product hits / 1k statements | ${fmt(aP)} | ${fmt(bP)} | ${sign}${delta.toFixed(2)} | ${ov} |`,
+    `| agent-check hits / 1k statements | ${fmt(aA)} | ${fmt(bA)} | ${(bA.mean - aA.mean).toFixed(2)} | ${rangesOverlap(aA, bA) ? 'yes' : 'no'} |`,
+  ]
+  const aDup = rows.filter(r => r.check === check && r.arm === baseline && r.metrics?.duplicationPct !== undefined)
+  const bDup = rows.filter(r => r.check === check && r.arm === other && r.metrics?.duplicationPct !== undefined)
+  if (aDup.length > 0 || bDup.length > 0) {
+    const a = stats(aDup.map(r => r.metrics?.duplicationPct ?? 0))
+    const b = stats(bDup.map(r => r.metrics?.duplicationPct ?? 0))
+    lines.push(
+      `| duplicated lines % | ${fmt(a)} | ${fmt(b)} | ${(b.mean - a.mean).toFixed(2)} | ${rangesOverlap(a, b) ? 'yes' : 'no'} |`,
+    )
+  }
+  lines.push('')
+  const topA = topRules(rows, check, baseline, 8)
+  const topB = topRules(rows, check, other, 8)
+  lines.push(
+    `Top product rules (${baseline}): ` +
+      (topA.length === 0 ? 'none.' : topA.map(t => `\`${t.rule}\` ${t.count}`).join(', ')),
+  )
+  lines.push(
+    `Top product rules (${other}): ` +
+      (topB.length === 0 ? 'none.' : topB.map(t => `\`${t.rule}\` ${t.count}`).join(', ')),
+  )
+  lines.push('')
+  for (const arm of [baseline, other]) {
+    const c = verdictCounts(reviews, check, arm)
+    const n = c.bug + c.fragile + c.style + c.noise
+    lines.push(
+      `${arm} reviewer (${n}): bug ${pct(c.bug, n)}, fragile ${pct(c.fragile, n)}, style ${pct(c.style, n)}, noise ${pct(c.noise, n)}.`,
+    )
+    const bugsEx = examplesFor(reviews, check, arm, 'bug', 2)
+    const fragEx = examplesFor(reviews, check, arm, 'fragile', 2)
+    if (bugsEx.length === 0 && fragEx.length === 0) lines.push('No bug or fragile examples.')
+    else {
+      for (const r of [...bugsEx, ...fragEx]) lines.push(exampleLine(r))
+    }
+    lines.push('')
+  }
+  return lines
+}
+
 export function sweepMarkdown(
   rows: SweepRow[],
   reviews: SweepReviewRow[],
   bugs: BugReplay[],
   meta: { model: string },
+  baseline: ArmId,
 ): string {
   const checks = [...new Set(rows.map(r => r.check))].sort()
+  const others = otherArms(uniqueArms(rows), baseline)
+  const only = others.length === 1
   const lines: string[] = [
     '# Sweep',
     '',
     'Candidate checks that neither eval arm enforced, scored on frozen snapshots.',
     `Reviewer model \`${meta.model}\`. Up to ${SAMPLE_CAP} product hits per check per arm, stratified by rule.`,
-    'Would-have-caught is (share of reviewed hits that are `bug` or `fragile`) times product hits per 1k statements in plain.',
+    `Would-have-caught is (share of reviewed hits that are \`bug\` or \`fragile\`) times product hits per 1k statements in ${baseline}.`,
     '',
   ]
   if (DROPPED.length > 0) {
@@ -1327,98 +1383,81 @@ export function sweepMarkdown(
     lines.push('')
   }
   for (const check of checks) {
-    const plainP = seriesFor(rows, check, 'plain', r => per1k(productHits(r).length, r.statements))
-    const lintP = seriesFor(rows, check, 'lint', r => per1k(productHits(r).length, r.statements))
-    const plainA = seriesFor(rows, check, 'plain', r => per1k(agentHits(r).length, r.statements))
-    const lintA = seriesFor(rows, check, 'lint', r => per1k(agentHits(r).length, r.statements))
-    const ov = rangesOverlap(plainP, lintP) ? 'yes' : 'no'
-    const delta = lintP.mean - plainP.mean
-    const sign = delta > 0 ? '+' : ''
     lines.push(`## \`${check}\``, '')
-    lines.push(
-      '| metric | plain mean (min-max) | lint mean (min-max) | delta (lint - plain) | overlap |',
-      '| --- | --- | --- | --- | --- |',
-      `| product hits / 1k statements | ${fmt(plainP)} | ${fmt(lintP)} | ${sign}${delta.toFixed(2)} | ${ov} |`,
-      `| agent-check hits / 1k statements | ${fmt(plainA)} | ${fmt(lintA)} | ${(lintA.mean - plainA.mean).toFixed(2)} | ${rangesOverlap(plainA, lintA) ? 'yes' : 'no'} |`,
-    )
-    const plainDup = rows.filter(r => r.check === check && r.arm === 'plain' && r.metrics?.duplicationPct !== undefined)
-    const lintDup = rows.filter(r => r.check === check && r.arm === 'lint' && r.metrics?.duplicationPct !== undefined)
-    if (plainDup.length > 0 || lintDup.length > 0) {
-      const p = stats(plainDup.map(r => r.metrics?.duplicationPct ?? 0))
-      const l = stats(lintDup.map(r => r.metrics?.duplicationPct ?? 0))
-      lines.push(
-        `| duplicated lines % | ${fmt(p)} | ${fmt(l)} | ${(l.mean - p.mean).toFixed(2)} | ${rangesOverlap(p, l) ? 'yes' : 'no'} |`,
-      )
+    if (others.length === 0) {
+      lines.push('No other arms to compare.', '')
+      continue
     }
-    lines.push('')
-    const topP = topRules(rows, check, 'plain', 8)
-    const topL = topRules(rows, check, 'lint', 8)
-    lines.push('Top product rules (plain): ' + (topP.length === 0 ? 'none.' : topP.map(t => `\`${t.rule}\` ${t.count}`).join(', ')))
-    lines.push('Top product rules (lint): ' + (topL.length === 0 ? 'none.' : topL.map(t => `\`${t.rule}\` ${t.count}`).join(', ')))
-    lines.push('')
-    for (const arm of ['plain', 'lint'] as const) {
-      const c = verdictCounts(reviews, check, arm)
-      const n = c.bug + c.fragile + c.style + c.noise
-      lines.push(
-        `${arm} reviewer (${n}): bug ${pct(c.bug, n)}, fragile ${pct(c.fragile, n)}, style ${pct(c.style, n)}, noise ${pct(c.noise, n)}.`,
-      )
-      const bugsEx = examplesFor(reviews, check, arm, 'bug', 2)
-      const fragEx = examplesFor(reviews, check, arm, 'fragile', 2)
-      if (bugsEx.length === 0 && fragEx.length === 0) lines.push('No bug or fragile examples.')
-      else {
-        for (const r of [...bugsEx, ...fragEx]) lines.push(exampleLine(r))
-      }
-      lines.push('')
+    for (const other of others) {
+      if (!only) lines.push(`### vs ${other}`, '')
+      lines.push(...sweepCheck(rows, reviews, check, baseline, other))
     }
   }
-  lines.push('## Would-have-caught ranking', '')
-  lines.push('Estimated plain-arm `bug`+`fragile` per 1k statements. Sample share times product-hit rate.', '')
+  lines.push(`## ${sectionTitle('Would-have-caught ranking', others[0] ?? baseline, only)}`, '')
+  lines.push(
+    `Estimated ${baseline}-arm \`bug\`+\`fragile\` per 1k statements. Sample share times product-hit rate.`,
+    '',
+  )
   type Rank = { check: string; score: number; share: number; rate: number; reviewed: number }
   const ranks: Rank[] = []
   for (const check of checks) {
-    const c = verdictCounts(reviews, check, 'plain')
+    const c = verdictCounts(reviews, check, baseline)
     const reviewed = c.bug + c.fragile + c.style + c.noise
     const share = reviewed === 0 ? 0 : (c.bug + c.fragile) / reviewed
-    const rate = seriesFor(rows, check, 'plain', r => per1k(productHits(r).length, r.statements)).mean
+    const rate = seriesFor(rows, check, baseline, r => per1k(productHits(r).length, r.statements)).mean
     ranks.push({ check, score: share * rate, share, rate, reviewed })
   }
   ranks.sort((a, b) => b.score - a.score || a.check.localeCompare(b.check))
-  lines.push('| check | bug+fragile / 1k (plain, estimated) | sample share | product hits / 1k | reviewed |', '| --- | --- | --- | --- | --- |')
+  lines.push(
+    `| check | bug+fragile / 1k (${baseline}, estimated) | sample share | product hits / 1k | reviewed |`,
+    '| --- | --- | --- | --- | --- |',
+  )
   for (const r of ranks) {
     lines.push(
       `| \`${r.check}\` | ${r.reviewed === 0 ? 'n/a' : r.score.toFixed(2)} | ${r.reviewed === 0 ? 'n/a' : `${Math.round(r.share * 100)}%`} | ${r.rate.toFixed(2)} | ${r.reviewed} |`,
     )
   }
-  lines.push('', '## Displacement', '')
-  lines.push(
-    'Checks neither arm enforced, where lint has more product hits per 1k statements than plain and the min-max ranges do not overlap.',
-    '',
-  )
-  const displaced: string[] = []
-  for (const check of checks) {
-    const plainP = seriesFor(rows, check, 'plain', r => per1k(productHits(r).length, r.statements))
-    const lintP = seriesFor(rows, check, 'lint', r => per1k(productHits(r).length, r.statements))
-    if (lintP.mean > plainP.mean && !rangesOverlap(plainP, lintP)) {
-      displaced.push(
-        `- \`${check}\`: lint ${fmt(lintP)} vs plain ${fmt(plainP)}`,
-      )
+  const other = others[0]
+  lines.push('', `## ${sectionTitle('Displacement', other ?? baseline, only)}`, '')
+  if (other === undefined) lines.push('No other arms to compare.', '')
+  else {
+    lines.push(
+      `Checks neither arm enforced, where ${other} has more product hits per 1k statements than ${baseline} and the min-max ranges do not overlap.`,
+      '',
+    )
+    const displaced: string[] = []
+    for (const o of others) {
+      for (const check of checks) {
+        const aP = seriesFor(rows, check, baseline, r => per1k(productHits(r).length, r.statements))
+        const bP = seriesFor(rows, check, o, r => per1k(productHits(r).length, r.statements))
+        if (bP.mean > aP.mean && !rangesOverlap(aP, bP)) {
+          displaced.push(`- \`${check}\`: ${o} ${fmt(bP)} vs ${baseline} ${fmt(aP)}`)
+        }
+      }
     }
+    if (displaced.length === 0) lines.push('None.', '')
+    else lines.push(...displaced, '')
   }
-  if (displaced.length === 0) lines.push('None.', '')
-  else lines.push(...displaced, '')
   lines.push('## cheatguard', '')
   const cg = rows.filter(r => r.check === 'cheatguard')
   if (cg.length === 0) lines.push('No cheatguard rows.', '')
+  else if (other === undefined) lines.push('No other arms to compare.', '')
   else {
     const checkpoints = [...new Set(cg.map(r => r.checkpoint))].sort((a, b) => a - b)
-    lines.push('| transition | plain hits (mean) | lint hits (mean) |', '| --- | --- | --- |')
-    for (const n of checkpoints) {
-      const p = stats(cg.filter(r => r.arm === 'plain' && r.checkpoint === n).map(r => r.hits.length))
-      const l = stats(cg.filter(r => r.arm === 'lint' && r.checkpoint === n).map(r => r.hits.length))
-      const from = n === 1 ? 'v0' : `v${n - 1}`
-      lines.push(`| ${from}..v${n} | ${fmt(p, 2)} | ${fmt(l, 2)} |`)
+    for (const o of others) {
+      if (!only) lines.push(`### vs ${o}`, '')
+      lines.push(
+        `| transition | ${baseline} hits (mean) | ${o} hits (mean) |`,
+        '| --- | --- | --- |',
+      )
+      for (const n of checkpoints) {
+        const a = stats(cg.filter(r => r.arm === baseline && r.checkpoint === n).map(r => r.hits.length))
+        const b = stats(cg.filter(r => r.arm === o && r.checkpoint === n).map(r => r.hits.length))
+        const from = n === 1 ? 'v0' : `v${n - 1}`
+        lines.push(`| ${from}..v${n} | ${fmt(a, 2)} | ${fmt(b, 2)} |`)
+      }
+      lines.push('')
     }
-    lines.push('')
     const cgHits = cg.flatMap(r => r.hits.map(h => ({ row: r, hit: h })))
     const shown = cgHits.slice(0, 8)
     if (shown.length === 0) lines.push('No findings.', '')
@@ -1446,6 +1485,7 @@ export function sweepMarkdown(
 }
 
 export async function selfCheckSweep(): Promise<void> {
+  selfCheckCompare()
   if (classifyCode('src/cli.ts') !== 'product') throw new Error('classifyCode: src/cli.ts')
   if (classifyCode('src/check.ts') !== 'agent-check') throw new Error('classifyCode: src/check.ts')
   if (classifyCode('src/lib/verify.ts') !== 'agent-check') throw new Error('classifyCode: verify')
@@ -1536,6 +1576,7 @@ export async function selfCheckSweep(): Promise<void> {
     ],
     [],
     { model: DEFAULT_MODEL },
+    'plain',
   )
   if (!md.includes('Would-have-caught ranking')) throw new Error('sweep.md ranking heading')
   if (!md.includes('type-coverage')) throw new Error('sweep.md dropped type-coverage')
@@ -1655,7 +1696,9 @@ async function runSweep(opts: SweepOpts): Promise<void> {
     reviews = await readJsonl(join(runDir, 'sweep-review.jsonl'), parseSweepReviewRow)
     bugs = await readJsonl(join(runDir, 'sweep-bugs.jsonl'), parseBugReplay)
   }
-  const md = sweepMarkdown(rows, reviews, bugs, { model: opts.model })
+  const present = uniqueArms(rows.length > 0 ? rows : manifest.workspaces)
+  const baseline = resolveBaseline(present, opts.baseline)
+  const md = sweepMarkdown(rows, reviews, bugs, { model: opts.model }, baseline)
   await writeFile(join(runDir, 'sweep.md'), md)
   process.stdout.write(md)
 }

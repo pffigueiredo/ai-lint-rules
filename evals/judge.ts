@@ -7,6 +7,7 @@ import {
   type WorkspaceRow,
   EVALS_DIR,
   capture,
+  isArmId,
   isRecord,
   listCheckpointTags,
   parseManifest,
@@ -14,6 +15,17 @@ import {
   spawnCursorAgent,
   walkSource,
 } from './lib.ts'
+import {
+  type Series,
+  hhHead,
+  hhRow,
+  otherArms,
+  resolveBaseline,
+  sectionTitle,
+  selfCheckCompare,
+  stats,
+  uniqueArms,
+} from './compare.ts'
 import { loadProblem } from './kinds.ts'
 import { runReview, selfCheckReview } from './review.ts'
 
@@ -87,6 +99,7 @@ type Opts = {
   concurrency: number
   fresh: boolean
   checkpoint: number | undefined
+  baseline: string | undefined
 }
 
 function flagOnce(argv: string[], name: string): string | undefined {
@@ -114,7 +127,8 @@ function parseArgs(argv: string[]): Opts {
     checkpoint = Number(checkpointRaw)
     if (!Number.isInteger(checkpoint) || checkpoint < 1) throw new Error('--checkpoint must be a positive integer')
   }
-  const valueFlags = new Set(['--model', '--concurrency', '--checkpoint', '--review'])
+  const baseline = flagOnce(argv, '--baseline')
+  const valueFlags = new Set(['--model', '--concurrency', '--checkpoint', '--review', '--baseline'])
   const positional: string[] = []
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
@@ -130,7 +144,17 @@ function parseArgs(argv: string[]): Opts {
     if (fresh) throw new Error('--fresh does not apply to --self-check')
     if (review) throw new Error('--review does not apply to --self-check')
     if (checkpoint !== undefined) throw new Error('--checkpoint does not apply to --self-check')
-    return { selfCheck: true, review: false, runDir: undefined, model, concurrency, fresh: false, checkpoint: undefined }
+    if (baseline !== undefined) throw new Error('--baseline does not apply to --self-check')
+    return {
+      selfCheck: true,
+      review: false,
+      runDir: undefined,
+      model,
+      concurrency,
+      fresh: false,
+      checkpoint: undefined,
+      baseline: undefined,
+    }
   }
   if (review) {
     const runDir = flagOnce(argv, '--review')
@@ -139,14 +163,17 @@ function parseArgs(argv: string[]): Opts {
         'usage: node evals/judge.ts --review <runDir> [--checkpoint N] [--model gpt-5.6-sol-high] [--concurrency 4] [--fresh]',
       )
     }
-    return { selfCheck: false, review: true, runDir, model, concurrency, fresh, checkpoint }
+    if (baseline !== undefined) throw new Error('--baseline does not apply to --review')
+    return { selfCheck: false, review: true, runDir, model, concurrency, fresh, checkpoint, baseline: undefined }
   }
   const runDir = positional[0]
   if (runDir === undefined || positional.length !== 1) {
-    throw new Error('usage: node evals/judge.ts <runDir> [--model gpt-5.6-sol-high] [--concurrency 4] [--fresh]')
+    throw new Error(
+      'usage: node evals/judge.ts <runDir> [--baseline plain] [--model gpt-5.6-sol-high] [--concurrency 4] [--fresh]',
+    )
   }
   if (checkpoint !== undefined) throw new Error('--checkpoint only applies to --review')
-  return { selfCheck: false, review: false, runDir, model, concurrency, fresh, checkpoint: undefined }
+  return { selfCheck: false, review: false, runDir, model, concurrency, fresh, checkpoint: undefined, baseline }
 }
 
 async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -488,7 +515,7 @@ function parseJudgeRow(raw: unknown): JudgeRow {
   if (typeof id !== 'string' || typeof problem !== 'string' || typeof checkpoint !== 'number' || typeof rep !== 'number') {
     throw new Error('judge.jsonl row missing fields')
   }
-  if (arm !== 'plain' && arm !== 'lint') throw new Error(`bad arm ${String(arm)}`)
+  if (typeof arm !== 'string' || !isArmId(arm)) throw new Error(`bad arm ${String(arm)}`)
   if (!Array.isArray(flags) || !isRecord(dropped)) throw new Error('judge.jsonl row missing flags')
   return raw as JudgeRow
 }
@@ -504,7 +531,7 @@ function parseGradeRow(raw: unknown): GradeRow {
   if (typeof id !== 'string' || typeof problem !== 'string' || typeof checkpoint !== 'number' || typeof rep !== 'number') {
     throw new Error('results.jsonl row missing fields')
   }
-  if (arm !== 'plain' && arm !== 'lint') throw new Error(`bad arm ${String(arm)}`)
+  if (typeof arm !== 'string' || !isArmId(arm)) throw new Error(`bad arm ${String(arm)}`)
   if (typeof statements !== 'number') throw new Error('results.jsonl row missing statements')
   return { id, problem, arm, rep, checkpoint, statements }
 }
@@ -655,20 +682,25 @@ async function runPairwise(
   model: string,
   concurrency: number,
   done: Set<string>,
+  baseline: ArmId,
+  others: ArmId[],
 ): Promise<void> {
-  const byPair = new Map<string, { plain?: WorkspaceRow; lint?: WorkspaceRow }>()
+  const byPair = new Map<string, Map<ArmId, WorkspaceRow>>()
   for (const ws of manifest.workspaces) {
     const k = `${ws.problem}\t${ws.rep}`
-    const slot = byPair.get(k) ?? {}
-    if (ws.arm === 'plain') slot.plain = ws
-    else slot.lint = ws
+    const slot = byPair.get(k) ?? new Map<ArmId, WorkspaceRow>()
+    slot.set(ws.arm, ws)
     byPair.set(k, slot)
   }
   const jobs: { problem: string; rep: number; a: WorkspaceRow; b: WorkspaceRow }[] = []
-  for (const slot of byPair.values()) {
-    if (slot.plain === undefined || slot.lint === undefined) continue
-    jobs.push({ problem: slot.plain.problem, rep: slot.plain.rep, a: slot.plain, b: slot.lint })
-    jobs.push({ problem: slot.plain.problem, rep: slot.plain.rep, a: slot.lint, b: slot.plain })
+  for (const other of others) {
+    for (const slot of byPair.values()) {
+      const base = slot.get(baseline)
+      const vs = slot.get(other)
+      if (base === undefined || vs === undefined) continue
+      jobs.push({ problem: base.problem, rep: base.rep, a: base, b: vs })
+      jobs.push({ problem: base.problem, rep: base.rep, a: vs, b: base })
+    }
   }
   const pending = jobs.filter(job => !done.has(pairwiseKey({ problem: job.problem, rep: job.rep, aArm: job.a.arm, bArm: job.b.arm })))
   const append = mutex()
@@ -690,42 +722,6 @@ async function runPairwise(
     done.add(pairwiseKey(row))
   })
 }
-
-type Series = { mean: number; min: number; max: number }
-
-function stats(xs: number[]): Series {
-  if (xs.length === 0) return { mean: 0, min: 0, max: 0 }
-  let min = xs[0]
-  let max = xs[0]
-  if (min === undefined || max === undefined) return { mean: 0, min: 0, max: 0 }
-  let sum = 0
-  for (const x of xs) {
-    sum += x
-    if (x < min) min = x
-    if (x > max) max = x
-  }
-  return { mean: sum / xs.length, min, max }
-}
-
-function fmt(s: Series, digits = 2): string {
-  return `${s.mean.toFixed(digits)} (${s.min.toFixed(digits)}-${s.max.toFixed(digits)})`
-}
-
-function rangesOverlap(a: Series, b: Series): boolean {
-  return a.min <= b.max && b.min <= a.max
-}
-
-function hhRow(name: string, plain: Series, lint: Series, digits: number): string {
-  const delta = lint.mean - plain.mean
-  const sign = delta > 0 ? '+' : ''
-  const ov = rangesOverlap(plain, lint) ? 'yes' : 'no'
-  return `| ${name} | ${fmt(plain, digits)} | ${fmt(lint, digits)} | ${sign}${delta.toFixed(digits)} | ${ov} |`
-}
-
-const HH_HEAD = [
-  '| metric | plain mean (min-max) | lint mean (min-max) | delta (lint - plain) | overlap |',
-  '| --- | --- | --- | --- | --- |',
-]
 
 function kept(flags: Flag[]): Flag[] {
   return flags.filter(f => f.confidence >= CONF_KEEP)
@@ -763,45 +759,42 @@ function armSeries(snaps: Snap[], arm: ArmId, fn: (s: Snap) => number): Series {
   return stats(snaps.filter(s => s.arm === arm).map(fn))
 }
 
-function winnerOf(row: PairwiseRow): 'plain' | 'lint' | 'tie' {
+function winnerOf(row: PairwiseRow): ArmId | 'tie' {
   if (row.pick === 'tie') return 'tie'
-  const chosen = row.pick === 'A' ? row.aArm : row.bArm
-  return chosen
+  return row.pick === 'A' ? row.aArm : row.bArm
 }
 
-function agreedWinner(a: PairwiseRow, b: PairwiseRow): 'plain' | 'lint' | 'tie' {
+function agreedWinner(a: PairwiseRow, b: PairwiseRow): ArmId | 'tie' {
   const wa = winnerOf(a)
   const wb = winnerOf(b)
   if (wa === wb) return wa
   return 'tie'
 }
 
-function slopMarkdown(
+function slopPair(
   snaps: Snap[],
   criteria: Criterion[],
   pairs: PairwiseRow[],
-): string {
+  baseline: ArmId,
+  other: ArmId,
+  only: boolean,
+): string[] {
   const byName = new Map(criteria.map(c => [c.name, c]))
   const excl = (s: Snap) => kept(s.flags).filter(f => !hasRule(byName.get(f.criteria)))
   const last = lastByWorkspace(snaps)
+  const head = hhHead(baseline, other)
   const lines: string[] = [
-    '# Slop',
-    '',
-    'Flags with confidence >= 3. `rule` criteria are ones this repo already lints, so the lint arm wins them by construction. Read the excluded-rule row as the part the overlay does not already force.',
-    '',
-    'Flags per 100 statements and new-flags rows count unique spans. Flags in the same file whose line ranges overlap merge into one (highest confidence kept). Category counts are per criterion, not per span.',
-    '',
-    ...HH_HEAD,
+    ...head,
     hhRow(
       'slop flags / 100 statements',
-      armSeries(last, 'plain', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
-      armSeries(last, 'lint', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
+      armSeries(last, baseline, s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
+      armSeries(last, other, s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
       2,
     ),
     hhRow(
       'slop flags / 100 statements (excluding rule criteria)',
-      armSeries(last, 'plain', s => per100(uniqueSpans(excl(s)).length, s.statements)),
-      armSeries(last, 'lint', s => per100(uniqueSpans(excl(s)).length, s.statements)),
+      armSeries(last, baseline, s => per100(uniqueSpans(excl(s)).length, s.statements)),
+      armSeries(last, other, s => per100(uniqueSpans(excl(s)).length, s.statements)),
       2,
     ),
   ]
@@ -821,63 +814,65 @@ function slopMarkdown(
     }
     return xs
   }
-  lines.push(
-    hhRow('new flags per checkpoint', stats(wsNew('plain')), stats(wsNew('lint')), 2),
-    '',
-  )
+  lines.push(hhRow('new flags per checkpoint', stats(wsNew(baseline)), stats(wsNew(other)), 2), '')
   const checkpoints = [...new Set(snaps.map(s => s.checkpoint))].sort((a, b) => a - b)
   for (const n of checkpoints) {
     const at = snaps.filter(s => s.checkpoint === n)
-    lines.push(`## Checkpoint ${n}`, '', ...HH_HEAD)
+    lines.push(`## ${sectionTitle(`Checkpoint ${n}`, other, only)}`, '', ...head)
     lines.push(
       hhRow(
         'slop flags / 100 statements',
-        armSeries(at, 'plain', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
-        armSeries(at, 'lint', s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
+        armSeries(at, baseline, s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
+        armSeries(at, other, s => per100(uniqueSpans(kept(s.flags)).length, s.statements)),
         2,
       ),
       hhRow(
         'slop flags / 100 statements (excluding rule criteria)',
-        armSeries(at, 'plain', s => per100(uniqueSpans(excl(s)).length, s.statements)),
-        armSeries(at, 'lint', s => per100(uniqueSpans(excl(s)).length, s.statements)),
+        armSeries(at, baseline, s => per100(uniqueSpans(excl(s)).length, s.statements)),
+        armSeries(at, other, s => per100(uniqueSpans(excl(s)).length, s.statements)),
         2,
       ),
       hhRow(
         'new flags',
-        armSeries(at, 'plain', s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length),
-        armSeries(at, 'lint', s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length),
+        armSeries(at, baseline, s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length),
+        armSeries(at, other, s => uniqueSpans(kept(s.flags).filter(f => f.origin === 'new')).length),
         2,
       ),
       '',
     )
   }
-  const catPlain = new Map<string, number>()
-  const catLint = new Map<string, number>()
+  const catA = new Map<string, number>()
+  const catB = new Map<string, number>()
   for (const s of last) {
-    const dest = s.arm === 'plain' ? catPlain : catLint
+    const dest = s.arm === baseline ? catA : s.arm === other ? catB : undefined
+    if (dest === undefined) continue
     for (const f of kept(s.flags)) {
       const cat = byName.get(f.criteria)?.category ?? 'unknown'
       dest.set(cat, (dest.get(cat) ?? 0) + 1)
     }
   }
-  const cats = [...new Set([...catPlain.keys(), ...catLint.keys()])].sort()
-  lines.push('## Categories (final checkpoint, confidence >= 3)', '')
-  lines.push('| category | plain | lint |', '| --- | --- | --- |')
+  const cats = [...new Set([...catA.keys(), ...catB.keys()])].sort()
+  lines.push(`## ${sectionTitle('Categories (final checkpoint, confidence >= 3)', other, only)}`, '')
+  lines.push(`| category | ${baseline} | ${other} |`, '| --- | --- | --- |')
   if (cats.length === 0) lines.push('| _(none)_ | 0 | 0 |')
   else {
-    for (const c of cats) lines.push(`| ${c} | ${catPlain.get(c) ?? 0} | ${catLint.get(c) ?? 0} |`)
+    for (const c of cats) lines.push(`| ${c} | ${catA.get(c) ?? 0} | ${catB.get(c) ?? 0} |`)
   }
   lines.push('')
 
+  const pairOf = pairs.filter(
+    p =>
+      (p.aArm === baseline && p.bArm === other) || (p.aArm === other && p.bArm === baseline),
+  )
   const byPair = new Map<string, PairwiseRow[]>()
-  for (const p of pairs) {
+  for (const p of pairOf) {
     const k = `${p.problem}\t${p.rep}`
     const list = byPair.get(k) ?? []
     list.push(p)
     byPair.set(k, list)
   }
-  let lintWins = 0
-  let plainWins = 0
+  let otherWins = 0
+  let baselineWins = 0
   let ties = 0
   const pairLines: string[] = []
   for (const [k, list] of [...byPair.entries()].sort()) {
@@ -891,29 +886,32 @@ function slopMarkdown(
     const second = list[1]
     if (first === undefined || second === undefined) continue
     const w = agreedWinner(first, second)
-    if (w === 'lint') lintWins += 1
-    else if (w === 'plain') plainWins += 1
+    if (w === other) otherWins += 1
+    else if (w === baseline) baselineWins += 1
     else ties += 1
     pairLines.push(`- ${problem} r${repRaw}: **${w}**`)
     for (const row of list) {
       pairLines.push(`  - A=${row.aArm} B=${row.bArm} pick ${row.pick}: ${row.reason}`)
     }
   }
-  lines.push('## Pairwise preference', '')
-  lines.push(`lint wins ${lintWins}, plain wins ${plainWins}, ties ${ties} (disagreement or incomplete orders count as a tie).`, '')
+  lines.push(`## ${sectionTitle('Pairwise preference', other, only)}`, '')
+  lines.push(
+    `${other} wins ${otherWins}, ${baseline} wins ${baselineWins}, ties ${ties} (disagreement or incomplete orders count as a tie).`,
+    '',
+  )
   lines.push(...pairLines, '')
 
-  const catTotals = cats.map(c => ({ c, n: (catPlain.get(c) ?? 0) + (catLint.get(c) ?? 0) }))
+  const catTotals = cats.map(c => ({ c, n: (catA.get(c) ?? 0) + (catB.get(c) ?? 0) }))
   catTotals.sort((a, b) => b.n - a.n)
   const top = catTotals.slice(0, 3).map(x => x.c)
-  lines.push('## What the flags look like', '')
+  lines.push(`## ${sectionTitle('What the flags look like', other, only)}`, '')
   if (top.length === 0) {
     lines.push('No flags at confidence >= 3.', '')
-    return `${lines.join('\n')}`
+    return lines
   }
   for (const cat of top) {
     lines.push(`### ${cat}`, '')
-    for (const arm of ['plain', 'lint'] as const) {
+    for (const arm of [baseline, other]) {
       const samples: { snap: Snap; flag: Flag }[] = []
       for (const s of last.filter(x => x.arm === arm)) {
         for (const f of kept(s.flags)) {
@@ -943,10 +941,50 @@ function slopMarkdown(
       }
     }
   }
+  return lines
+}
+
+function slopMarkdown(
+  snaps: Snap[],
+  criteria: Criterion[],
+  pairs: PairwiseRow[],
+  baseline: ArmId,
+  others: ArmId[],
+): string {
+  const only = others.length === 1
+  const other = others[0]
+  const ruleWin =
+    other !== undefined && only && baseline === 'plain'
+      ? `so the ${other} arm wins them by construction`
+      : 'so flags those overlay rules already cover are not the treatment'
+  const lines: string[] = [
+    '# Slop',
+    '',
+    `Flags with confidence >= 3. \`rule\` criteria are ones this repo already lints, ${ruleWin}. Read the excluded-rule row as the part the overlay does not already force.`,
+    '',
+    'Flags per 100 statements and new-flags rows count unique spans. Flags in the same file whose line ranges overlap merge into one (highest confidence kept). Category counts are per criterion, not per span.',
+    '',
+  ]
+  if (others.length === 0) {
+    lines.push('No other arms to compare.', '')
+    return `${lines.join('\n')}`
+  }
+  for (const o of others) {
+    const at = snaps.filter(s => s.arm === baseline || s.arm === o)
+    if (!only) lines.push(`## vs ${o}`, '')
+    lines.push(...slopPair(at, criteria, pairs, baseline, o, only))
+  }
   return `${lines.join('\n')}`
 }
 
-async function writeSlopMd(runDir: string, criteria: Criterion[], judgeRows: JudgeRow[], pairs: PairwiseRow[]): Promise<void> {
+async function writeSlopMd(
+  runDir: string,
+  criteria: Criterion[],
+  judgeRows: JudgeRow[],
+  pairs: PairwiseRow[],
+  baseline: ArmId,
+  others: ArmId[],
+): Promise<void> {
   const grades = await readJsonl(join(runDir, 'results.jsonl'), parseGradeRow)
   const gKey = (r: GradeRow) => snapshotKey(r.id, r.checkpoint)
   const gMap = new Map(grades.map(g => [gKey(g), g]))
@@ -964,7 +1002,7 @@ async function writeSlopMd(runDir: string, criteria: Criterion[], judgeRows: Jud
       flags: row.flags,
     })
   }
-  const md = slopMarkdown(snaps, criteria, pairs)
+  const md = slopMarkdown(snaps, criteria, pairs, baseline, others)
   await writeFile(join(runDir, 'slop.md'), md)
   process.stdout.write(md)
 }
@@ -1127,6 +1165,9 @@ function selfCheckParseArgs(): void {
   if (slop.selfCheck || slop.review || slop.runDir !== 'evals/runs/x' || slop.checkpoint !== undefined) {
     throw new Error('parseArgs: slop run')
   }
+  if (slop.baseline !== undefined) throw new Error('parseArgs: default baseline')
+  const withBase = parseArgs(['evals/runs/x', '--baseline', 'lint'])
+  if (withBase.baseline !== 'lint') throw new Error('parseArgs: --baseline')
   const rev = parseArgs(['--review', 'evals/runs/x', '--checkpoint', '3', '--concurrency', '2'])
   if (!rev.review || rev.runDir !== 'evals/runs/x' || rev.checkpoint !== 3 || rev.concurrency !== 2) {
     throw new Error('parseArgs: --review')
@@ -1150,6 +1191,7 @@ function selfCheckParseArgs(): void {
 async function selfCheck(model: string): Promise<void> {
   const criteria = await loadRubric()
   const known = new Set(criteria.map(c => c.name))
+  selfCheckCompare()
   selfCheckParseArgs()
   selfCheckParser(known)
   selfCheckSpans()
@@ -1209,7 +1251,13 @@ async function archiveIfPresent(from: string, to: string): Promise<void> {
   else await rename(from, to)
 }
 
-async function judgeRun(runDir: string, model: string, concurrency: number, fresh: boolean): Promise<void> {
+async function judgeRun(
+  runDir: string,
+  model: string,
+  concurrency: number,
+  fresh: boolean,
+  requestedBaseline: string | undefined,
+): Promise<void> {
   const gradesPath = join(runDir, 'results.jsonl')
   try {
     await readFile(gradesPath, 'utf8')
@@ -1230,12 +1278,15 @@ async function judgeRun(runDir: string, model: string, concurrency: number, fres
   await pool(manifest.workspaces, concurrency, ws =>
     judgeWorkspace(runDir, ws, criteria, known, model, done, prevByKey, appendJudge),
   )
+  const present = uniqueArms(manifest.workspaces)
+  const baseline = resolveBaseline(present, requestedBaseline)
+  const others = otherArms(present, baseline)
   const pairExisting = await readJsonl(join(runDir, 'pairwise.jsonl'), parsePairwiseRow)
   const pairDone = new Set(pairExisting.map(pairwiseKey))
-  await runPairwise(runDir, manifest, model, concurrency, pairDone)
+  await runPairwise(runDir, manifest, model, concurrency, pairDone, baseline, others)
   const judgeRows = await readJsonl(join(runDir, 'judge.jsonl'), parseJudgeRow)
   const pairs = await readJsonl(join(runDir, 'pairwise.jsonl'), parsePairwiseRow)
-  await writeSlopMd(runDir, criteria, judgeRows, pairs)
+  await writeSlopMd(runDir, criteria, judgeRows, pairs, baseline, others)
 }
 
 const argv = process.argv.slice(2)
@@ -1252,5 +1303,5 @@ else if (opts.review) {
   })
 } else {
   if (opts.runDir === undefined) throw new Error('need runDir')
-  await judgeRun(opts.runDir, opts.model, opts.concurrency, opts.fresh)
+  await judgeRun(opts.runDir, opts.model, opts.concurrency, opts.fresh, opts.baseline)
 }

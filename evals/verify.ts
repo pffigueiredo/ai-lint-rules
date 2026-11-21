@@ -19,11 +19,13 @@ import {
   type Manifest,
   capture,
   copySolution,
+  isArmId,
   isRecord,
   listCheckpointTags,
   parseManifest,
   readJson,
 } from './lib.ts'
+import { otherArms, resolveBaseline, uniqueArms } from './compare.ts'
 import { getKind, loadProblem } from './kinds.ts'
 
 function usage(): never {
@@ -144,7 +146,7 @@ function parseRow(raw: unknown): PropertyRow | undefined {
   const commands = raw['commands']
   const detail = raw['detail']
   const ms = raw['ms']
-  if (typeof id !== 'string' || (arm !== 'plain' && arm !== 'lint')) return undefined
+  if (typeof id !== 'string' || typeof arm !== 'string' || !isArmId(arm)) return undefined
   if (typeof checkpoint !== 'number' || typeof property !== 'string' || typeof ok !== 'boolean') return undefined
   if (typeof seed !== 'number' || typeof numRuns !== 'number' || typeof detail !== 'string' || typeof ms !== 'number') {
     return undefined
@@ -177,24 +179,29 @@ async function loadRows(path: string): Promise<PropertyRow[]> {
   return rows
 }
 
-function propertiesMarkdown(rows: PropertyRow[], checkpoint: number, b: Bounds): string {
+function propertiesMarkdown(rows: PropertyRow[], checkpoint: number, b: Bounds, baseline: ArmId): string {
   const at = rows.filter(r => r.checkpoint === checkpoint && r.seed === b.seed && r.numRuns === b.numRuns)
+  const others = otherArms(uniqueArms(rows), baseline)
   const lines: string[] = [
     '# Properties',
     '',
     `Checkpoint ${checkpoint}. Seed ${b.seed}, ${b.numRuns} runs, max ${b.maxCommands} commands, \`--today ${TODAY}\`, ids 1-4 and 99.`,
     '',
-    '| property | plain violate | lint violate |',
-    '| --- | --- | --- |',
   ]
-  for (const def of PROPERTIES) {
-    if (!def.checkpoints.includes(checkpoint)) continue
-    const of = (arm: ArmId): string => {
-      const xs = at.filter(r => r.property === def.id && r.arm === arm)
-      if (xs.length === 0) return 'n/a'
-      return `${xs.filter(r => !r.ok).length}/${xs.length}`
+  if (others.length === 0) lines.push('No other arms to compare.', '')
+  else {
+    for (const other of others) {
+      lines.push(`| property | ${baseline} violate | ${other} violate |`, '| --- | --- | --- |')
+      for (const def of PROPERTIES) {
+        if (!def.checkpoints.includes(checkpoint)) continue
+        const of = (arm: ArmId): string => {
+          const xs = at.filter(r => r.property === def.id && r.arm === arm)
+          if (xs.length === 0) return 'n/a'
+          return `${xs.filter(r => !r.ok).length}/${xs.length}`
+        }
+        lines.push(`| ${def.id} | ${of(baseline)} | ${of(other)} |`)
+      }
     }
-    lines.push(`| ${def.id} | ${of('plain')} | ${of('lint')} |`)
   }
   lines.push('', '## Counterexamples', '')
   const bad = at.filter(r => !r.ok)
@@ -301,7 +308,8 @@ async function verifyRunDir(runDir: string, checkpoint: number, b: Bounds): Prom
     process.stderr.write(`verify ${ws.id} checkpoint ${checkpoint}\n`)
     rows.push(...(await verifyWorkspace(runDir, ws, checkpoint, b, done, jsonlPath)))
   }
-  const md = propertiesMarkdown(rows, checkpoint, b)
+  const baseline = resolveBaseline(uniqueArms(rows.length > 0 ? rows : tasks), undefined)
+  const md = propertiesMarkdown(rows, checkpoint, b, baseline)
   await writeFile(join(runDir, 'properties.md'), md)
   process.stdout.write(md)
 }

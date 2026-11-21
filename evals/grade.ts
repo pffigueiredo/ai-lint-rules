@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import {
   type ArmId,
@@ -22,7 +23,24 @@ import {
   selfCheckPool,
   writeJson,
 } from './lib.ts'
-import { getKind, loadProblem, materializeArm } from './kinds.ts'
+import {
+  hhHead,
+  hhRow,
+  otherArms,
+  resolveBaseline,
+  sectionTitle,
+  selfCheckCompare,
+  stats,
+  uniqueArms,
+} from './compare.ts'
+import {
+  COMPLEXITY_COGNITIVE_MAX,
+  COMPLEXITY_CYCLOMATIC_MAX,
+  COMPLEXITY_PLUGIN,
+  getKind,
+  loadProblem,
+  materializeArm,
+} from './kinds.ts'
 
 const BIN = {
   oxlint: join(REPO_ROOT, 'node_modules/.bin/oxlint'),
@@ -45,6 +63,7 @@ const KNIP_IGNORE_DEPS = [
   '@testing-library/user-event',
   '@testing-library/dom',
   'eslint-plugin-react-you-might-not-need-an-effect',
+  'oxlint-plugin-complexity',
   '@types/.+',
 ] as const
 
@@ -70,6 +89,7 @@ type Quality = {
   ccHigh: number
   ccExtreme: number
   ccMax: number
+  moduleComplexity: number
   lintErrors: number
   lintByRule: Record<string, number>
   tscErrors: number
@@ -110,6 +130,7 @@ type Row = {
   ccHigh: number
   ccExtreme: number
   ccMax: number
+  moduleComplexity: number
   lintErrors: number
   lintByRule: Record<string, number>
   tscErrors: number
@@ -177,6 +198,7 @@ type LintMetrics = {
   ccHigh: number
   ccExtreme: number
   ccMax: number
+  moduleComplexity: number
   lintErrors: number
   lintByRule: Record<string, number>
 }
@@ -189,6 +211,7 @@ function emptyLintMetrics(): LintMetrics {
     ccHigh: 0,
     ccExtreme: 0,
     ccMax: 0,
+    moduleComplexity: 0,
     lintErrors: 0,
     lintByRule: {},
   }
@@ -224,7 +247,9 @@ function parseOxlint(stdout: string): LintMetrics {
       const m = METRICS_RE.exec(message)
       if (m === null) throw new Error(`metrics diagnostic: ${message}`)
       acc.statements += Number(m[1])
-      addFn(acc, Number(m[2]))
+      const moduleComplexity = Number(m[2])
+      addFn(acc, moduleComplexity)
+      if (moduleComplexity > acc.moduleComplexity) acc.moduleComplexity = moduleComplexity
       acc.metricsFiles += 1
       continue
     }
@@ -366,6 +391,7 @@ async function qualityOf(ws: string, kind: Kind): Promise<Quality> {
     ccHigh: lint.ccHigh,
     ccExtreme: lint.ccExtreme,
     ccMax: lint.ccMax,
+    moduleComplexity: lint.moduleComplexity,
     lintErrors: lint.lintErrors,
     lintByRule: lint.lintByRule,
     tscErrors,
@@ -555,6 +581,72 @@ async function selfCheckMetrics(): Promise<void> {
   }
 }
 
+async function selfCheckLintCc(): Promise<void> {
+  for (const kindId of ['cli', 'react'] as const) {
+    const dest = await mkdtemp(join(tmpdir(), `${kindId}-cc-`))
+    try {
+      if (dest.includes('lint-cc')) throw new Error('lint-cc self-check: tmp path contains arm name')
+      await materializeArm(dest, 'lint-cc', kindId)
+      const kind = getKind(kindId)
+      await assertPlantedBlind(dest, kind)
+      for (const rel of kind.planted) {
+        let body: string
+        try {
+          body = await readFile(join(dest, rel), 'utf8')
+        } catch {
+          continue
+        }
+        if (rel.includes('lint-cc') || body.includes('lint-cc')) {
+          throw new Error(`${rel} contains the arm name`)
+        }
+      }
+      const cfg = await readJson(join(dest, '.oxlintrc.json'))
+      if (!isRecord(cfg) || !isRecord(cfg['rules'])) throw new Error('lint-cc oxlintrc missing rules')
+      const cyclomatic = cfg['rules']['eslint/complexity']
+      if (
+        !Array.isArray(cyclomatic) ||
+        !isRecord(cyclomatic[1]) ||
+        cyclomatic[1]['max'] !== COMPLEXITY_CYCLOMATIC_MAX
+      ) {
+        throw new Error('lint-cc missing eslint/complexity max 20')
+      }
+      const cognitive = cfg['rules']['complexity/complexity']
+      if (
+        !Array.isArray(cognitive) ||
+        !isRecord(cognitive[1]) ||
+        cognitive[1]['cognitive'] !== COMPLEXITY_COGNITIVE_MAX
+      ) {
+        throw new Error('lint-cc missing cognitive max 15')
+      }
+      const jsPlugins = cfg['jsPlugins']
+      if (!Array.isArray(jsPlugins) || !jsPlugins.includes(COMPLEXITY_PLUGIN)) {
+        throw new Error('lint-cc missing oxlint-plugin-complexity jsPlugin')
+      }
+      const pkg = await readJson(join(dest, 'package.json'))
+      if (!isRecord(pkg) || !isRecord(pkg['devDependencies'])) throw new Error('lint-cc package.json')
+      if (typeof pkg['devDependencies'][COMPLEXITY_PLUGIN] !== 'string') {
+        throw new Error('lint-cc missing plugin in workspace devDependencies')
+      }
+      if (kindId !== 'cli') continue
+      await kind.prepareTools(dest)
+      await mkdir(join(dest, 'src'), { recursive: true })
+      const lines = ['export function heavy(n: number): number {', '  let x = n']
+      for (let i = 0; i <= 20; i += 1) lines.push(`  if (x === ${i}) x += 1`)
+      lines.push('  return x', '}', '')
+      await writeFile(join(dest, 'src/cli.ts'), lines.join('\n'))
+      const ran = await capture(BIN.oxlint, ['-c', join(dest, '.oxlintrc.json'), 'src'], {
+        cwd: dest,
+        timeoutMs: 30_000,
+      })
+      if (ran.code === 0) throw new Error('lint-cc: heavy function should fail oxlint')
+      const out = `${ran.stdout}\n${ran.stderr}`
+      if (!out.includes('complexity')) throw new Error(`lint-cc: oxlint missed complexity\n${out.slice(-1000)}`)
+    } finally {
+      await rm(dest, { recursive: true, force: true })
+    }
+  }
+}
+
 async function selfCheckKnip(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'knip-fix-'))
   try {
@@ -584,16 +676,19 @@ async function selfCheck(): Promise<void> {
   if (slugs.length === 0) throw new Error('no problems under evals/problems')
   process.stderr.write('self-check pool\n')
   await selfCheckPool()
+  selfCheckCompare()
   process.stderr.write('self-check metrics fixture\n')
   await selfCheckMetrics()
   process.stderr.write('self-check knip fixture\n')
   await selfCheckKnip()
+  process.stderr.write('self-check lint-cc overlay\n')
+  await selfCheckLintCc()
   for (const slug of slugs) {
     const problem = await loadProblem(slug)
     process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
-  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, pool\n`)
+  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, lint-cc, pool\n`)
 }
 
 async function loadManifest(runDir: string): Promise<Manifest> {
@@ -657,6 +752,7 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
       ccHigh: q.ccHigh,
       ccExtreme: q.ccExtreme,
       ccMax: q.ccMax,
+      moduleComplexity: q.moduleComplexity,
       lintErrors: q.lintErrors,
       lintByRule: q.lintByRule,
       tscErrors: q.tscErrors,
@@ -681,26 +777,6 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
   await rm(clone, { recursive: true, force: true })
   return rows
 }
-
-function stats(xs: number[]): { mean: number; min: number; max: number } {
-  if (xs.length === 0) return { mean: 0, min: 0, max: 0 }
-  let min = xs[0]
-  let max = xs[0]
-  if (min === undefined || max === undefined) return { mean: 0, min: 0, max: 0 }
-  let sum = 0
-  for (const x of xs) {
-    sum += x
-    if (x < min) min = x
-    if (x > max) max = x
-  }
-  return { mean: sum / xs.length, min, max }
-}
-
-function fmt(s: { mean: number; min: number; max: number }, digits = 2): string {
-  return `${s.mean.toFixed(digits)} (${s.min.toFixed(digits)}-${s.max.toFixed(digits)})`
-}
-
-type Series = { mean: number; min: number; max: number }
 
 type WsSummary = {
   solvedPct: number
@@ -770,44 +846,28 @@ function workspaceSummaries(rows: Row[]): WsSummary[] {
   return out
 }
 
-function rangesOverlap(a: Series, b: Series): boolean {
-  return a.min <= b.max && b.min <= a.max
-}
-
-function pickStats<T>(xs: T[], fn: (x: T) => number): Series {
+function pickStats<T>(xs: T[], fn: (x: T) => number) {
   return stats(xs.map(fn))
 }
 
-function hhRow(name: string, plain: Series, lint: Series, digits: number): string {
-  const delta = lint.mean - plain.mean
-  const sign = delta > 0 ? '+' : ''
-  const ov = rangesOverlap(plain, lint) ? 'yes' : 'no'
-  return `| ${name} | ${fmt(plain, digits)} | ${fmt(lint, digits)} | ${sign}${delta.toFixed(digits)} | ${ov} |`
-}
-
-const HH_HEAD = [
-  '| metric | plain mean (min-max) | lint mean (min-max) | delta (lint - plain) | overlap |',
-  '| --- | --- | --- | --- | --- |',
-]
-
-function outcomeTable(plain: WsSummary[], lint: WsSummary[]): string[] {
-  const p = (fn: (s: WsSummary) => number) => pickStats(plain, fn)
-  const l = (fn: (s: WsSummary) => number) => pickStats(lint, fn)
+function outcomeTable(a: WsSummary[], b: WsSummary[], baseline: ArmId, other: ArmId): string[] {
+  const left = (fn: (s: WsSummary) => number) => pickStats(a, fn)
+  const right = (fn: (s: WsSummary) => number) => pickStats(b, fn)
   return [
-    ...HH_HEAD,
-    hhRow('% checkpoints solved', p(s => s.solvedPct), l(s => s.solvedPct), 1),
-    hhRow('% iso-solved', p(s => s.isoPct), l(s => s.isoPct), 1),
-    hhRow('core pass rate', p(s => s.core), l(s => s.core), 2),
-    hhRow('regression pass rate', p(s => s.regression), l(s => s.regression), 2),
-    hhRow('complexity erosion', p(s => s.ccErosion), l(s => s.ccErosion), 3),
-    hhRow('statements', p(s => s.statements), l(s => s.statements), 1),
-    hhRow('delta statements %', p(s => s.deltaStatementsPct), l(s => s.deltaStatementsPct), 1),
-    hhRow('churn ratio', p(s => s.churn), l(s => s.churn), 3),
-    hhRow('unused files', p(s => s.unusedFiles), l(s => s.unusedFiles), 1),
-    hhRow('unused exports', p(s => s.unusedExports), l(s => s.unusedExports), 1),
-    hhRow('unused deps', p(s => s.unusedDeps), l(s => s.unusedDeps), 1),
-    hhRow('tokens', p(s => s.tokens), l(s => s.tokens), 0),
-    hhRow('duration ms', p(s => s.durationMs), l(s => s.durationMs), 0),
+    ...hhHead(baseline, other),
+    hhRow('% checkpoints solved', left(s => s.solvedPct), right(s => s.solvedPct), 1),
+    hhRow('% iso-solved', left(s => s.isoPct), right(s => s.isoPct), 1),
+    hhRow('core pass rate', left(s => s.core), right(s => s.core), 2),
+    hhRow('regression pass rate', left(s => s.regression), right(s => s.regression), 2),
+    hhRow('complexity erosion', left(s => s.ccErosion), right(s => s.ccErosion), 3),
+    hhRow('statements', left(s => s.statements), right(s => s.statements), 1),
+    hhRow('delta statements %', left(s => s.deltaStatementsPct), right(s => s.deltaStatementsPct), 1),
+    hhRow('churn ratio', left(s => s.churn), right(s => s.churn), 3),
+    hhRow('unused files', left(s => s.unusedFiles), right(s => s.unusedFiles), 1),
+    hhRow('unused exports', left(s => s.unusedExports), right(s => s.unusedExports), 1),
+    hhRow('unused deps', left(s => s.unusedDeps), right(s => s.unusedDeps), 1),
+    hhRow('tokens', left(s => s.tokens), right(s => s.tokens), 0),
+    hhRow('duration ms', left(s => s.durationMs), right(s => s.durationMs), 0),
   ]
 }
 
@@ -842,15 +902,15 @@ function rowAsSummary(row: Row): WsSummary {
   }
 }
 
-function complianceTable(plain: WsSummary[], lint: WsSummary[]): string[] {
-  const p = (fn: (s: WsSummary) => number) => pickStats(plain, fn)
-  const l = (fn: (s: WsSummary) => number) => pickStats(lint, fn)
+function complianceTable(a: WsSummary[], b: WsSummary[], baseline: ArmId, other: ArmId): string[] {
+  const left = (fn: (s: WsSummary) => number) => pickStats(a, fn)
+  const right = (fn: (s: WsSummary) => number) => pickStats(b, fn)
   return [
-    ...HH_HEAD,
-    hhRow('lint violations per LOC', p(s => s.lintPerLoc), l(s => s.lintPerLoc), 3),
-    hhRow('tsc strict errors', p(s => s.tscErrors), l(s => s.tscErrors), 1),
-    hhRow('suppressions', p(s => s.suppressions), l(s => s.suppressions), 1),
-    hhRow('% ran pnpm check', p(s => s.ranCheckPct), l(s => s.ranCheckPct), 1),
+    ...hhHead(baseline, other),
+    hhRow('lint violations per LOC', left(s => s.lintPerLoc), right(s => s.lintPerLoc), 3),
+    hhRow('tsc strict errors', left(s => s.tscErrors), right(s => s.tscErrors), 1),
+    hhRow('suppressions', left(s => s.suppressions), right(s => s.suppressions), 1),
+    hhRow('% ran pnpm check', left(s => s.ranCheckPct), right(s => s.ranCheckPct), 1),
   ]
 }
 
@@ -871,13 +931,13 @@ function failedCalls(rows: Row[]): string[] {
   return lines
 }
 
-function perRuleTable(plain: WsSummary[], lint: WsSummary[]): string[] {
+function perRuleTable(a: WsSummary[], b: WsSummary[], baseline: ArmId, other: ArmId): string[] {
   const names = new Set<string>()
-  for (const s of [...plain, ...lint]) {
+  for (const s of [...a, ...b]) {
     for (const k of Object.keys(s.lintPerLocByRule)) names.add(k)
   }
   const lines = [
-    '| rule | plain per LOC | lint per LOC | plain count | lint count |',
+    `| rule | ${baseline} per LOC | ${other} per LOC | ${baseline} count | ${other} count |`,
     '| --- | --- | --- | --- | --- |',
   ]
   const sorted = [...names].sort()
@@ -886,51 +946,98 @@ function perRuleTable(plain: WsSummary[], lint: WsSummary[]): string[] {
     return lines
   }
   for (const rule of sorted) {
-    const pLoc = stats(plain.map(s => s.lintPerLocByRule[rule] ?? 0))
-    const lLoc = stats(lint.map(s => s.lintPerLocByRule[rule] ?? 0))
-    const pN = stats(plain.map(s => s.lintByRule[rule] ?? 0))
-    const lN = stats(lint.map(s => s.lintByRule[rule] ?? 0))
+    const aLoc = stats(a.map(s => s.lintPerLocByRule[rule] ?? 0))
+    const bLoc = stats(b.map(s => s.lintPerLocByRule[rule] ?? 0))
+    const aN = stats(a.map(s => s.lintByRule[rule] ?? 0))
+    const bN = stats(b.map(s => s.lintByRule[rule] ?? 0))
     lines.push(
-      `| ${rule} | ${pLoc.mean.toFixed(4)} | ${lLoc.mean.toFixed(4)} | ${pN.mean.toFixed(2)} | ${lN.mean.toFixed(2)} |`,
+      `| ${rule} | ${aLoc.mean.toFixed(4)} | ${bLoc.mean.toFixed(4)} | ${aN.mean.toFixed(2)} | ${bN.mean.toFixed(2)} |`,
     )
   }
   return lines
 }
 
-function summaryMarkdown(rows: Row[]): string {
+function comparisonBlocks(rows: Row[], baseline: ArmId, other: ArmId, only: boolean): string[] {
+  const overallA = workspaceSummaries(rows.filter(r => r.arm === baseline))
+  const overallB = workspaceSummaries(rows.filter(r => r.arm === other))
   const lines: string[] = [
-    '# Summary',
+    `## ${sectionTitle('Outcome', other, only)}`,
     '',
-    'Question: do the lint rules help, plain vs lint, in iterative runs?',
+    ...outcomeTable(overallA, overallB, baseline, other),
     '',
-    'Outcome metrics can show help or harm. Compliance metrics only show whether the lint arm followed or gamed the rules. Full SlopCodeBench erosion (complexity + lint/LOC) stays in `results.jsonl` and is not an outcome.',
-    '',
-    ...failedCalls(rows),
   ]
-  const overallPlain = workspaceSummaries(rows.filter(r => r.arm === 'plain'))
-  const overallLint = workspaceSummaries(rows.filter(r => r.arm === 'lint'))
-  lines.push('## Outcome', '')
-  lines.push(...outcomeTable(overallPlain, overallLint), '')
   const checkpoints = [...new Set(rows.map(r => r.checkpoint))].sort((a, b) => a - b)
   for (const n of checkpoints) {
     const at = rows.filter(r => r.checkpoint === n)
-    lines.push(`## Outcome, checkpoint ${n}`, '')
+    lines.push(`## ${sectionTitle(`Outcome, checkpoint ${n}`, other, only)}`, '')
     lines.push(
       ...outcomeTable(
-        at.filter(r => r.arm === 'plain').map(rowAsSummary),
-        at.filter(r => r.arm === 'lint').map(rowAsSummary),
+        at.filter(r => r.arm === baseline).map(rowAsSummary),
+        at.filter(r => r.arm === other).map(rowAsSummary),
+        baseline,
+        other,
       ),
       '',
     )
   }
-  lines.push('## Compliance', '')
-  lines.push(...complianceTable(overallPlain, overallLint), '')
-  lines.push('## Lint violations by rule (final checkpoint, per LOC)', '')
-  lines.push(...perRuleTable(overallPlain, overallLint), '')
+  lines.push(`## ${sectionTitle('Compliance', other, only)}`, '')
+  lines.push(...complianceTable(overallA, overallB, baseline, other), '')
+  lines.push(`## ${sectionTitle('Lint violations by rule (final checkpoint, per LOC)', other, only)}`, '')
+  lines.push(...perRuleTable(overallA, overallB, baseline, other), '')
+  return lines
+}
+
+function complexityTables(rows: Row[]): string[] {
+  const checkpoints = [...new Set(rows.map(r => r.checkpoint))].sort((a, b) => a - b)
+  const lines: string[] = [
+    '## Complexity caps',
+    '',
+    'ccMax includes the metrics plugin `(module)` pseudo-function. moduleComplexity is that value alone. A rise there is logic moved out of functions.',
+    '',
+  ]
+  for (const n of checkpoints) {
+    const at = rows.filter(r => r.checkpoint === n).slice().sort((a, b) => a.id.localeCompare(b.id))
+    lines.push(`### Checkpoint ${n}`, '')
+    lines.push('| workspace | arm | ccMax | (module) | statements |', '| --- | --- | --- | --- | --- |')
+    for (const r of at) {
+      lines.push(`| \`${r.id}\` | ${r.arm} | ${r.ccMax} | ${r.moduleComplexity} | ${r.statements} |`)
+    }
+    lines.push('')
+  }
+  return lines
+}
+
+export function summaryMarkdown(rows: Row[], baseline: ArmId): string {
+  const present = uniqueArms(rows)
+  const others = otherArms(present, baseline)
+  const only = others.length === 1
+  const other = others[0]
+  const question =
+    other !== undefined && only
+      ? `Question: do the lint rules help, ${baseline} vs ${other}, in iterative runs?`
+      : `Question: do the lint rules help, ${baseline} vs each other arm, in iterative runs?`
+  const complianceNote =
+    other !== undefined && only
+      ? `Compliance metrics only show whether the ${other} arm followed or gamed the rules.`
+      : 'Compliance metrics only show whether each other arm followed or gamed the rules.'
+  const lines: string[] = [
+    '# Summary',
+    '',
+    question,
+    '',
+    `Outcome metrics can show help or harm. ${complianceNote} Full SlopCodeBench erosion (complexity + lint/LOC) stays in \`results.jsonl\` and is not an outcome.`,
+    '',
+    ...failedCalls(rows),
+  ]
+  if (others.length === 0) lines.push('No other arms to compare.', '')
+  else {
+    for (const o of others) lines.push(...comparisonBlocks(rows, baseline, o, only))
+  }
+  if (present.includes('lint-cc')) lines.push(...complexityTables(rows))
   return `${lines.join('\n')}`
 }
 
-async function gradeRunDir(runDir: string): Promise<void> {
+async function gradeRunDir(runDir: string, requestedBaseline: string | undefined): Promise<void> {
   const manifest = await loadManifest(runDir)
   const rows: Row[] = []
   for (const ws of manifest.workspaces) {
@@ -939,21 +1046,49 @@ async function gradeRunDir(runDir: string): Promise<void> {
   }
   const jsonl = rows.map(r => JSON.stringify(r)).join('\n')
   await writeFile(join(runDir, 'results.jsonl'), jsonl === '' ? '' : `${jsonl}\n`)
-  const md = summaryMarkdown(rows)
+  const baseline = resolveBaseline(uniqueArms(rows.length > 0 ? rows : manifest.workspaces), requestedBaseline)
+  const md = summaryMarkdown(rows, baseline)
   await writeFile(join(runDir, 'summary.md'), md)
   process.stdout.write(md)
 }
 
 function usage(): never {
-  process.stderr.write('usage: node evals/grade.ts --self-check | node evals/grade.ts evals/runs/<ts>\n')
+  process.stderr.write(
+    'usage: node evals/grade.ts --self-check | node evals/grade.ts evals/runs/<ts> [--baseline plain]\n',
+  )
   process.exit(2)
 }
 
-const argv = process.argv.slice(2)
-if (argv[0] === '--self-check') {
-  await selfCheck()
-} else if (argv[0] !== undefined && argv.length === 1) {
-  await gradeRunDir(argv[0])
-} else {
-  usage()
+function parseGradeArgs(argv: string[]): { selfCheck: boolean; runDir?: string | undefined; baseline?: string | undefined } {
+  if (argv[0] === '--self-check') {
+    if (argv.length !== 1) usage()
+    return { selfCheck: true }
+  }
+  let runDir: string | undefined
+  let baseline: string | undefined
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i]
+    if (a === undefined) break
+    if (a === '--baseline') {
+      i += 1
+      const v = argv[i]
+      if (v === undefined) throw new Error('missing value for --baseline')
+      baseline = v
+      continue
+    }
+    if (a.startsWith('--') || runDir !== undefined) usage()
+    runDir = a
+  }
+  if (runDir === undefined) usage()
+  return { selfCheck: false, runDir, baseline }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const opts = parseGradeArgs(process.argv.slice(2))
+  if (opts.selfCheck) {
+    await selfCheck()
+  } else {
+    if (opts.runDir === undefined) usage()
+    await gradeRunDir(opts.runDir, opts.baseline)
+  }
 }
