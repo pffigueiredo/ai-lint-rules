@@ -17,6 +17,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 - `konsistent/konsistent.json` — [konsistent](https://www.npmjs.com/package/konsistent) convention that every page route sets its meta
 - `oxlint/stack` — all the Oxlint configs above in one `.oxlintrc.json`
 - `oracles` — runnable property and oracle tests with [fast-check](https://fast-check.dev), and how to write them
+- `evals` — two CLI problems that measure whether the TypeScript rules change what an agent writes
 
 Needs `oxlint` and `@oxlint/plugins` at matching versions. The copies here were taken from `1.83.0`. Floating promises also need `oxlint-tsgolint`.
 
@@ -184,3 +185,25 @@ They fit logic with a rule you can state: "never overlap", "exactly once", "same
 | `no-restricted-classes` | Bans arbitrary type, tracking, leading, shadow, and radius. Also bans spacing on `.25` / `.75` steps so the scale stays on a 2px grid |
 
 The restrict patterns in `oxlint/tailwind-theme/oxlintrc.example.json` assume named tokens in `@theme`. Change the messages to match the tokens you actually ship.
+
+## Evals
+
+A lint rule that never changes what an agent writes is documentation. `evals/` asks one model to implement a CLI, once in a `plain` strict-TypeScript project and once in a `lint` project that carries `oxlint/typescript` plus `tsconfig/strict.json`. Hidden cases grade correctness. LOC, churn, cyclomatic complexity, suppressions, and lint hits grade erosion.
+
+Each problem is three checkpoints in the same repo. Checkpoint N adds requirements and still has to pass the cases from 1..N-1.
+
+```sh
+node evals/run.ts --problem ledger --arm plain --arm lint --reps 1 --model cursor-grok-4.6-high
+node evals/grade.ts evals/runs/<timestamp>
+```
+
+Pass `--problem tasks` for the other problem, `--checkpoints K` to stop early, and `--out evals/runs/<dir>` to resume. Bundles land in `evals/runs/<timestamp>/`.
+
+`summary.md` is one table per arm, mean and min-max across reps. Solved means every case of that checkpoint passed, including earlier checkpoints as regression. Iso-solved means the new cases passed even if regression failed. The per-rule table is which rules fired.
+
+```sh
+node evals/grade.ts --self-check
+```
+
+That checks that each reference solution passes every case and `pnpm check` under the lint arm, and that an empty `src/cli.ts` fails every case. `pnpm typecheck` includes `evals/`.
+
