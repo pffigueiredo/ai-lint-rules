@@ -79,11 +79,11 @@ describe('core', () => {
     setPath('/?q=lis&open=1')
     stubList()
     renderApp(<App />)
-    const box = await screen.findByLabelText('Search')
+    expect(await screen.findByRole('button', { name: 'Moonlight' })).toBeTruthy()
+    const box = screen.getByLabelText('Search')
     expect((box as HTMLInputElement).value).toBe('lis')
     expect((screen.getByLabelText('Open now') as HTMLInputElement).checked).toBe(true)
     expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Moonlight' })).toBeTruthy()
   })
 
   it('sorts by city then id when Sort is City', async () => {

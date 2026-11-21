@@ -121,8 +121,9 @@ describe('functionality', () => {
     setPath('/?venue=v1')
     stubApi()
     renderApp(<App />)
-    expect(await screen.findByText('Rooftop in Bairro Alto.')).toBeTruthy()
-    expect(screen.getByText('22:00-04:00')).toBeTruthy()
+    const region = await screen.findByRole('region', { name: 'Venue details' })
+    expect(region.textContent ?? '').toContain('Rooftop in Bairro Alto.')
+    expect(region.textContent ?? '').toContain('22:00-04:00')
   })
 
   it('hides the details region when venue is missing from the URL', async () => {

@@ -35,7 +35,13 @@ describe('core', () => {
     const pending = new Promise<Response>(r => {
       resolve = r
     })
-    vi.stubGlobal('fetch', vi.fn(() => pending))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (requestPath(input) === '/api/favorites') return jsonResponse({ ids: [] })
+        return pending
+      }),
+    )
     renderApp(<App />)
     expect(await screen.findByText('Loading venues')).toBeTruthy()
     resolve(jsonResponse({ venues: VENUES }))
