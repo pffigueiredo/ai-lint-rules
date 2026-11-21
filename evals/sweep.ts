@@ -37,7 +37,6 @@ import {
   sectionTitle,
   selfCheckCompare,
   stats,
-  uniqueArms,
 } from './compare.ts'
 
 const OXLINT = join(REPO_ROOT, 'node_modules/.bin/oxlint')
@@ -1367,7 +1366,7 @@ export function sweepMarkdown(
   baseline: ArmId,
 ): string {
   const checks = [...new Set(rows.map(r => r.check))].sort()
-  const others = otherArms(uniqueArms(rows), baseline)
+  const others = otherArms(armsPresent(rows), baseline)
   const only = others.length === 1
   const lines: string[] = [
     '# Sweep',
@@ -1579,8 +1578,49 @@ export async function selfCheckSweep(): Promise<void> {
     'plain',
   )
   if (!md.includes('Would-have-caught ranking')) throw new Error('sweep.md ranking heading')
+  if (!md.includes('| metric | plain mean (min-max) | lint mean (min-max) | delta (lint - plain) | overlap |')) {
+    throw new Error('sweep.md plain-vs-lint head')
+  }
   if (!md.includes('type-coverage')) throw new Error('sweep.md dropped type-coverage')
   if (/grok/i.test(md)) throw new Error('sweep.md leaked grok')
+  const ccFirst: SweepRow[] = [
+    {
+      id: 'ledger-lint-cc-r1',
+      problem: 'ledger',
+      arm: 'lint-cc',
+      rep: 1,
+      checkpoint: 5,
+      check: 'complexity',
+      statements: 100,
+      hits: [],
+    },
+    {
+      id: 'ledger-lint-r1',
+      problem: 'ledger',
+      arm: 'lint',
+      rep: 1,
+      checkpoint: 5,
+      check: 'complexity',
+      statements: 100,
+      hits: [
+        {
+          check: 'complexity',
+          rule: 'eslint(complexity)',
+          file: 'src/cli.ts',
+          line: 1,
+          endLine: 40,
+          message: 'complexity',
+          code: 'product',
+        },
+      ],
+    },
+  ]
+  const ccBaseline = resolveBaseline(armsPresent(ccFirst), undefined)
+  if (ccBaseline !== 'lint') throw new Error(`racy jsonl defaulted baseline to ${ccBaseline}`)
+  const ccMd = sweepMarkdown(ccFirst, [], [], { model: DEFAULT_MODEL }, ccBaseline)
+  if (!ccMd.includes('| metric | lint mean (min-max) | lint-cc mean (min-max) | delta (lint-cc - lint) | overlap |')) {
+    throw new Error('sweep.md lint-vs-lint-cc head follows ARM_IDS, not jsonl order')
+  }
   process.stderr.write(`self-check sweep ok: ${[...ids].join(', ')}; dropped ${DROPPED.map(d => d.id).join(', ') || '(none)'}\n`)
 }
 
@@ -1696,7 +1736,7 @@ async function runSweep(opts: SweepOpts): Promise<void> {
     reviews = await readJsonl(join(runDir, 'sweep-review.jsonl'), parseSweepReviewRow)
     bugs = await readJsonl(join(runDir, 'sweep-bugs.jsonl'), parseBugReplay)
   }
-  const present = uniqueArms(rows.length > 0 ? rows : manifest.workspaces)
+  const present = armsPresent(rows.length > 0 ? rows : manifest.workspaces)
   const baseline = resolveBaseline(present, opts.baseline)
   const md = sweepMarkdown(rows, reviews, bugs, { model: opts.model }, baseline)
   await writeFile(join(runDir, 'sweep.md'), md)
