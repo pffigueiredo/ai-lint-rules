@@ -6,9 +6,11 @@ import {
   loadProblem as loadProblemMeta,
 } from './lib.ts'
 import { cliKind } from './cli-kind.ts'
+import { reactKind } from './react-kind.ts'
 
 export const KINDS = {
   cli: cliKind,
+  react: reactKind,
 }
 
 export type KindId = keyof typeof KINDS
