@@ -188,7 +188,7 @@ The restrict patterns in `oxlint/tailwind-theme/oxlintrc.example.json` assume na
 
 ## Evals
 
-`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints, once in a plain workspace (`plain`) and once with this repo's overlay (`lint`).
+`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints in one or more arms. `plain` is the template with no overlay. `lint` plants this repo's overlay. `lint-cc` is exactly that overlay plus `eslint/complexity` max 20 and `oxlint-plugin-complexity` cognitive complexity max 15. The agent sees those as extra rules in `.oxlintrc.json`. The arm name never appears in a workspace path or planted file. Function caps do not cover module-level code. The grader's `(module)` pseudo-function measures whether an agent moved logic to module scope to dodge the cap.
 
 CLI problems (`ledger`, `tasks`) start from `evals/template`. The lint overlay is `oxlint/typescript` plus `tsconfig/strict.json`. Hidden checks run `src/cli.ts` against JSON cases.
 
@@ -199,11 +199,12 @@ Hidden checks grade correctness. Outcome metrics (solved rates, complexity, size
 ```sh
 node evals/run.ts --problem ledger --arm plain --arm lint --reps 1 --model cursor-grok-4.6-high
 node evals/grade.ts evals/runs/<timestamp>
+node evals/grade.ts evals/runs/<timestamp> --baseline lint
 ```
 
 Pass `--problem venues` or `--problem signup` for a React problem, `--problem tasks` for the other CLI problem, `--checkpoints K` to stop early, and `--out evals/runs/<dir>` to resume. Bundles land in `evals/runs/<timestamp>/`. `--timeout-min` (default 20) kills a session that runs too long. `--stall-min` (default 6) kills a session that prints no stdout for that many minutes and records `stalled`. The runner starts `cursor-agent` in its own process group and kills the group when the session ends, times out, or stalls, so leftover Vite or browser processes do not hold ports.
 
-`summary.md` opens with a head-to-head table, one row per outcome metric, with plain, lint, delta (lint minus plain), and `overlap`. Overlap is yes when the two min-max ranges overlap, so that delta is noise. The same table is repeated per checkpoint, because a gap that only appears later is the result that matters. Unused files, unused exports, and unused dependencies from knip are in that outcome table. Neither arm's rules target those. Failed, timed-out, or stalled agent calls are listed and still counted in the rates. Then compliance, then lint hits per rule.
+`summary.md` opens with a head-to-head table, one row per outcome metric. The baseline arm is `--baseline` (default `plain` if that arm is in the run, otherwise the first arm in the manifest). Each other arm gets its own table against that baseline, with delta (other minus baseline) and `overlap`. Overlap is yes when the two min-max ranges overlap, so that delta is noise. Two-arm plain vs lint output matches the old headings. The same table is repeated per checkpoint, because a gap that only appears later is the result that matters. Unused files, unused exports, and unused dependencies from knip are in that outcome table. Neither arm's rules target those. Failed, timed-out, or stalled agent calls are listed and still counted in the rates. Then compliance, then lint hits per rule. When `lint-cc` is in the run, a Complexity caps section lists per-workspace `ccMax`, `(module)` complexity, and statements.
 
 Solved means every check of that checkpoint passed, including earlier checkpoints as regression. Iso-solved means the new checks passed even if regression failed.
 
@@ -213,19 +214,20 @@ node evals/grade.ts --self-check
 
 That checks that each reference solution passes every hidden check and `pnpm check` under the lint arm. An empty `src/cli.ts` or an `App` that returns null fails every check. `pnpm typecheck` includes `evals/`.
 
-Hidden JSON cases do not try long command sequences. `node evals/verify.ts --self-check` drives the tasks CLI with fast-check sequences and checks spec-stated state-machine properties. `node evals/verify.ts <runDir>` scores plain vs lint `tasks-*` snapshots at a checkpoint and writes `properties.jsonl` plus `properties.md`. See `.cursor/skills/verify-tasks-state-machine/SKILL.md`.
+Hidden JSON cases do not try long command sequences. `node evals/verify.ts --self-check` drives the tasks CLI with fast-check sequences and checks spec-stated state-machine properties. `node evals/verify.ts <runDir>` scores `tasks-*` snapshots at a checkpoint against the same baseline rule and writes `properties.jsonl` plus `properties.md`. See `.cursor/skills/verify-tasks-state-machine/SKILL.md`.
 
 After `grade.ts`, score slop with an LLM judge. Grade must have written `results.jsonl` first, because flag rates are per 100 statements.
 
 ```sh
 node evals/judge.ts evals/runs/<timestamp>
+node evals/judge.ts evals/runs/<timestamp> --baseline lint
 ```
 
 The default judge model is `gpt-5.6-sol-high`. It must not be grok, because the candidate is grok. Pass `--model` to change it and `--concurrency` (default 4) for parallel snapshots. The judge sees only `src/**` and the specs. It never sees the arm, the candidate model, or configs. Rerun the same command to resume. Snapshots already in `judge.jsonl` are skipped.
 
 `evals/rubric.jsonl` is adapted from [SlopCodeBench](https://github.com/SprocketLab/slop-code-bench) (MIT). Language-neutral criteria stay. Python examples are TypeScript. Criteria that cannot occur in a small TS CLI or React app are dropped. Local criteria cover slop these rules cannot see, and React patterns the overlay already bans. Each criterion has `source` (`scbench` or `local`) and `rule`: the overlay rule ids that already ban that slop, or `null`. `slop.md` reports flags per 100 statements twice. The second row drops criteria whose `rule` is set, because the lint arm wins those by construction.
 
-`slop.md` uses the same head-to-head table as `summary.md`. Read overlap the same way. It also lists new flags per checkpoint, counts by category, and pairwise preference. Pairwise shows both final `src/**` trees as Project A and Project B, in both orders. A win counts only when both orders agree. Disagreement is a tie. The qualitative section quotes flagged snippets so you can see what the judge meant.
+`slop.md` uses the same head-to-head table as `summary.md`, baseline vs each other arm. Read overlap the same way. It also lists new flags per checkpoint, counts by category, and pairwise preference. Pairwise shows both final `src/**` trees as Project A and Project B, in both orders, for the baseline vs each other arm. A win counts only when both orders agree. Disagreement is a tie. The qualitative section quotes flagged snippets so you can see what the judge meant.
 
 Review each overlay rule as a senior reviewer would:
 
@@ -239,6 +241,8 @@ On the plain arm, the reviewer sees every yardstick oxlint error (the same confi
 
 On the lint arm, the reviewer sees the overlay rules and their messages from the repo configs and `oxlint/react-bans`, not the arm name. They mark workarounds `better`, `same`, `worse`, or `bug`.
 
+On `lint-cc`, only the complexity rules count as the rule being satisfied. The reviewer judges splits, extracted helpers, and tables against one bigger function.
+
 `review.md` has one table per rule with plain-hit counts, `% bug` / `% fragile` / `% style` / `% noise`, lint-arm workaround counts, `% better` / `% same` / `% worse` / `% bug`, a net verdict, and two or three examples per side. The net verdict is computed:
 
 - earns its place. At least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.
@@ -251,6 +255,7 @@ Score candidate checks that neither arm enforced, on the same frozen snapshots, 
 
 ```sh
 node evals/sweep.ts evals/runs/<timestamp>
+node evals/sweep.ts evals/runs/<timestamp> --baseline lint
 ```
 
 That writes `sweep.jsonl` (one row per workspace, checkpoint, and check), reviews up to 10 product hits per check per arm with the same benefit prompt as `--review` (default `gpt-5.6-sol-high`, never grok), replays CLI `bug` inputs, and writes `sweep.md`. Pass `--no-review` to skip the LLM. `node evals/sweep.ts --self-check` plants one known hit per check.
