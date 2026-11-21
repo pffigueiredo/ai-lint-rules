@@ -122,7 +122,9 @@ describe('functionality', () => {
     stubApi()
     renderApp(<App />)
     const region = await screen.findByRole('region', { name: 'Venue details' })
-    expect(region.textContent ?? '').toContain('Rooftop in Bairro Alto.')
+    await waitFor(() => {
+      expect(region.textContent ?? '').toContain('Rooftop in Bairro Alto.')
+    })
     expect(region.textContent ?? '').toContain('22:00-04:00')
   })
 
