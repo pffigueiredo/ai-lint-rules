@@ -9,9 +9,11 @@
   },
   "devDependencies": {
     "@oxlint/plugins": "1.83.0",
+    "@types/node": "^26.6.6",
     "eslint-plugin-better-tailwindcss": "4.7.0",
     "fast-check": "^4.10.2",
     "oxlint": "1.83.0",
+    "oxlint-tsgolint": "^7.0.2007",
     "supercluster": "^9.1.0",
     "typescript": "^7.0.2",
     "vitest": "3.2.4"
