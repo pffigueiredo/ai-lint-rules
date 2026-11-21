@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -27,8 +27,26 @@ import { getKind, loadProblem, materializeArm } from './kinds.ts'
 const BIN = {
   oxlint: join(REPO_ROOT, 'node_modules/.bin/oxlint'),
   tsc: join(REPO_ROOT, 'node_modules/.bin/tsc'),
+  knip: join(REPO_ROOT, 'node_modules/.bin/knip'),
   git: 'git',
 }
+
+const KNIP_IGNORE_DEPS = [
+  'typescript',
+  'oxlint',
+  'oxlint-tsgolint',
+  '@oxlint/plugins',
+  'vite',
+  '@vitejs/plugin-react',
+  'babel-plugin-react-compiler',
+  'vitest',
+  'jsdom',
+  '@testing-library/react',
+  '@testing-library/user-event',
+  '@testing-library/dom',
+  'eslint-plugin-react-you-might-not-need-an-effect',
+  '@types/.+',
+] as const
 
 type AgentStatus = 'ok' | 'timeout' | 'stalled' | 'error' | 'missing'
 
@@ -60,6 +78,15 @@ type Quality = {
   erosion: number
 }
 
+type DeadCode = {
+  unusedFiles: number
+  unusedExports: number
+  unusedDeps: number
+  unusedFileNames: string[]
+  unusedExportNames: string[]
+  unusedDepNames: string[]
+}
+
 type Row = {
   id: string
   problem: string
@@ -89,6 +116,12 @@ type Row = {
   suppressions: number
   ccErosion: number
   erosion: number
+  unusedFiles: number
+  unusedExports: number
+  unusedDeps: number
+  unusedFileNames: string[]
+  unusedExportNames: string[]
+  unusedDepNames: string[]
   durationMs: number
   inputTokens: number
   outputTokens: number
@@ -233,6 +266,90 @@ async function tscErrorCount(ws: string, kind: Kind): Promise<number> {
     if (/error TS\d+/.test(line)) n += 1
   }
   return n
+}
+
+function knipNames(raw: unknown, at: string): string[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) throw new Error(`${at}: expected array`)
+  const out: string[] = []
+  for (const item of raw) {
+    if (!isRecord(item) || typeof item['name'] !== 'string') throw new Error(`${at}: item.name missing`)
+    out.push(item['name'])
+  }
+  return out
+}
+
+function parseKnip(stdout: string): DeadCode {
+  const start = stdout.indexOf('{')
+  if (start < 0) throw new Error(`knip json missing:\n${stdout}`)
+  const parsed: unknown = JSON.parse(stdout.slice(start))
+  if (!isRecord(parsed) || !Array.isArray(parsed['issues'])) {
+    throw new Error('knip json: missing issues')
+  }
+  const unusedFileNames: string[] = []
+  const unusedExportNames: string[] = []
+  const unusedDepNames: string[] = []
+  for (const issue of parsed['issues']) {
+    if (!isRecord(issue) || typeof issue['file'] !== 'string') {
+      throw new Error('knip json: issue.file missing')
+    }
+    const file = issue['file']
+    unusedFileNames.push(...knipNames(issue['files'], 'knip files'))
+    for (const name of knipNames(issue['exports'], 'knip exports')) {
+      unusedExportNames.push(`${file}:${name}`)
+    }
+    for (const name of knipNames(issue['types'], 'knip types')) {
+      unusedExportNames.push(`${file}:${name}`)
+    }
+    unusedDepNames.push(...knipNames(issue['dependencies'], 'knip dependencies'))
+    unusedDepNames.push(...knipNames(issue['devDependencies'], 'knip devDependencies'))
+  }
+  unusedFileNames.sort()
+  unusedExportNames.sort()
+  unusedDepNames.sort()
+  return {
+    unusedFiles: unusedFileNames.length,
+    unusedExports: unusedExportNames.length,
+    unusedDeps: unusedDepNames.length,
+    unusedFileNames,
+    unusedExportNames,
+    unusedDepNames,
+  }
+}
+
+async function knipMetrics(ws: string, kind: Kind): Promise<DeadCode> {
+  const cfgDir = await mkdtemp(join(tmpdir(), 'knip-cfg-'))
+  try {
+    const cfgPath = join(cfgDir, 'knip.json')
+    await writeJson(cfgPath, {
+      entry: [...kind.knipEntry],
+      project: ['src/**/*.{ts,tsx}'],
+      ignoreDependencies: [...KNIP_IGNORE_DEPS],
+      ignoreFiles: ['**/*.d.ts'],
+      vite: false,
+    })
+    const ran = await capture(
+      BIN.knip,
+      [
+        '--config',
+        cfgPath,
+        '--reporter',
+        'json',
+        '--no-progress',
+        '--no-config-hints',
+        '--include',
+        'files,exports,types,dependencies',
+        '--no-exit-code',
+      ],
+      { cwd: ws, timeoutMs: 60_000 },
+    )
+    if (ran.code !== 0) {
+      throw new Error(`knip failed (exit ${ran.code})\n${ran.stderr}\n${ran.stdout}`)
+    }
+    return parseKnip(ran.stdout)
+  } finally {
+    await rm(cfgDir, { recursive: true, force: true })
+  }
 }
 
 async function qualityOf(ws: string, kind: Kind): Promise<Quality> {
@@ -438,6 +555,30 @@ async function selfCheckMetrics(): Promise<void> {
   }
 }
 
+async function selfCheckKnip(): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'knip-fix-'))
+  try {
+    await mkdir(join(dir, 'src'), { recursive: true })
+    await writeJson(join(dir, 'package.json'), {
+      name: 'knip-fixture',
+      private: true,
+      type: 'module',
+      dependencies: { 'left-pad': '1.3.0' },
+    })
+    await writeFile(join(dir, 'src/cli.ts'), "import { used } from './used.ts'\nused()\n")
+    await writeFile(join(dir, 'src/used.ts'), 'export function used() {}\nexport function leftover() {}\n')
+    await writeFile(join(dir, 'src/dead.ts'), 'export const ghost = 1\n')
+    const dead = await knipMetrics(dir, getKind('cli'))
+    if (dead.unusedFiles !== 1 || dead.unusedExports !== 1 || dead.unusedDeps !== 1) {
+      throw new Error(
+        `knip fixture: files ${dead.unusedFiles} exports ${dead.unusedExports} deps ${dead.unusedDeps}, want 1 1 1`,
+      )
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 async function selfCheck(): Promise<void> {
   const slugs = await listProblemSlugs()
   if (slugs.length === 0) throw new Error('no problems under evals/problems')
@@ -445,12 +586,14 @@ async function selfCheck(): Promise<void> {
   await selfCheckPool()
   process.stderr.write('self-check metrics fixture\n')
   await selfCheckMetrics()
+  process.stderr.write('self-check knip fixture\n')
+  await selfCheckKnip()
   for (const slug of slugs) {
     const problem = await loadProblem(slug)
     process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
-  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, pool\n`)
+  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, pool\n`)
 }
 
 async function loadManifest(runDir: string): Promise<Manifest> {
@@ -475,6 +618,7 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
     await kind.prepareGrade(clone)
     const cases = await kind.runCheckpoint(clone, problem, n)
     const q = await qualityOf(clone, kind)
+    const dead = await knipMetrics(clone, kind)
     const prevRef = n === 1 ? 'v0' : `v${n - 1}`
     const diff = await numstat(clone, prevRef, `v${n}`)
     const churn = prevLoc === 0 ? 0 : (diff.added + diff.removed) / prevLoc
@@ -519,6 +663,12 @@ async function gradeWorkspace(runDir: string, ws: Manifest['workspaces'][number]
       suppressions: q.suppressions,
       ccErosion: q.ccErosion,
       erosion: q.erosion,
+      unusedFiles: dead.unusedFiles,
+      unusedExports: dead.unusedExports,
+      unusedDeps: dead.unusedDeps,
+      unusedFileNames: dead.unusedFileNames,
+      unusedExportNames: dead.unusedExportNames,
+      unusedDepNames: dead.unusedDepNames,
       durationMs: agent.durationMs,
       inputTokens: agent.inputTokens,
       outputTokens: agent.outputTokens,

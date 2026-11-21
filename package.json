@@ -18,6 +18,7 @@
     "eslint-plugin-react-you-might-not-need-an-effect": "1.2.0",
     "fast-check": "^4.10.2",
     "jsdom": "31.0.1",
+    "knip": "6.45.1",
     "oxlint": "1.83.0",
     "oxlint-tsgolint": "^7.0.2007",
     "supercluster": "^9.1.0",

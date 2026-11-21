@@ -292,6 +292,7 @@ export const reactKind: Kind = {
   },
   runCheckpoint,
   sourceFiles: srcDir => walkSource(srcDir, ['.ts', '.tsx']),
+  knipEntry: ['src/main.tsx', 'src/App.tsx'],
   yardstickOxlint: async () => {
     const example = await readJson(STACK_EXAMPLE)
     if (!isRecord(example)) throw new Error('stack oxlintrc.example.json must be an object')

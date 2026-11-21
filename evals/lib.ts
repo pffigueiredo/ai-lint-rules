@@ -42,6 +42,7 @@ export type Kind = {
   hydrateEmpty: (dest: string) => Promise<void>
   runCheckpoint: (ws: string, problem: Problem, checkpoint: number) => Promise<CheckRun>
   sourceFiles: (srcDir: string) => Promise<string[]>
+  knipEntry: readonly string[]
   yardstickOxlint: () => Promise<Record<string, unknown>>
   yardstickTsconfig: () => Promise<Record<string, unknown>>
   concurrency: number | undefined

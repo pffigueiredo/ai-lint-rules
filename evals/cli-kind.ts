@@ -276,6 +276,7 @@ export const cliKind: Kind = {
   },
   runCheckpoint,
   sourceFiles: srcDir => walkSource(srcDir, ['.ts']),
+  knipEntry: ['src/cli.ts'],
   yardstickOxlint: async () => {
     const example = await readJson(join(REPO_ROOT, 'oxlint/typescript/oxlintrc.example.json'))
     if (!isRecord(example)) throw new Error('oxlintrc.example.json must be an object')
