@@ -1,6 +1,7 @@
 import { access, appendFile, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import {
   type ArmId,
   type Kind,
@@ -31,6 +32,12 @@ const TSC = join(REPO_ROOT, 'node_modules/.bin/tsc')
 const JSCPD = join(REPO_ROOT, 'node_modules/.bin/jscpd')
 const CHEATGUARD = join(REPO_ROOT, 'node_modules/.bin/cheatguard')
 const ANTI_SLOP_PLUGIN = join(EVALS_DIR, 'vendor/anti-slop/index.ts')
+// React snapshots install their own node_modules, so a bare package name would resolve there, not here.
+const COMPLEXITY_PLUGIN = fileURLToPath(import.meta.resolve('oxlint-plugin-complexity'))
+const TS_RESET_DTS = join(
+  dirname(fileURLToPath(import.meta.resolve('@total-typescript/ts-reset/package.json'))),
+  'dist/recommended.d.ts',
+)
 const METRICS_CODE = 'metrics(file)'
 const METRICS_RE = /statements (\d+) moduleComplexity (\d+)/u
 const AGENT_CHECK_RE = /(check|test|spec|verify|smoke|e2e)/i
@@ -338,7 +345,7 @@ function reactCompilerConfig(): Record<string, unknown> {
 function complexityConfig(): Record<string, unknown> {
   return {
     plugins: ['eslint'],
-    jsPlugins: [METRICS_PLUGIN, 'oxlint-plugin-complexity'],
+    jsPlugins: [METRICS_PLUGIN, COMPLEXITY_PLUGIN],
     rules: {
       'eslint/complexity': ['error', { max: 20 }],
       'complexity/complexity': ['error', { cyclomatic: 10_000, cognitive: 15, minLines: 0 }],
@@ -517,7 +524,7 @@ async function runTsReset(ctx: CheckCtx): Promise<CheckResult> {
   const withPath = join(ctx.clone, '.grader-tsconfig-reset.json')
   const resetPath = join(ctx.clone, '.grader-reset.d.ts')
   await writeJson(withoutPath, base)
-  await writeFile(resetPath, "import '@total-typescript/ts-reset'\n")
+  await writeFile(resetPath, `/// <reference path=${JSON.stringify(TS_RESET_DTS)} />\n`)
   const includeRaw = base['include']
   const include = Array.isArray(includeRaw) ? includeRaw.filter(x => typeof x === 'string') : ['src']
   await writeJson(withPath, { ...base, include: [...include, '.grader-reset.d.ts'] })
@@ -604,7 +611,8 @@ async function runAntiSlop(ctx: CheckCtx): Promise<CheckResult> {
 }
 
 async function runNkzw(ctx: CheckCtx): Promise<CheckResult> {
-  const cfgPath = join(ctx.clone, '.grader-oxlint.config.ts')
+  const cfgDir = await mkdtemp(join(EVALS_DIR, '.sweep-nkzw-'))
+  const cfgPath = join(cfgDir, 'oxlint.config.ts')
   await writeFile(cfgPath, NKZW_CONFIG)
   try {
     const ran = await capture(OXLINT, ['--format', 'json', '-c', cfgPath, 'src'], {
@@ -616,7 +624,7 @@ async function runNkzw(ctx: CheckCtx): Promise<CheckResult> {
     }
     return { hits: parseOxlintHits(ran.stdout, ctx.clone, ctx.files) }
   } finally {
-    await rm(cfgPath, { force: true })
+    await rm(cfgDir, { recursive: true, force: true })
   }
 }
 
