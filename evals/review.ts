@@ -3,6 +3,7 @@ import { join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import {
+  type ArmId,
   type Kind,
   type Manifest,
   type WorkspaceRow,
@@ -68,15 +69,22 @@ export type CostFinding = {
   input: string | null
 }
 
+export type OverlayArmId = Exclude<ArmId, 'plain'>
+
 export type CostRow = {
   kind: 'cost'
   id: string
   problem: string
-  arm: 'lint'
+  arm: OverlayArmId
   rep: number
   checkpoint: number
   findings: CostFinding[]
 }
+
+export const COMPLEXITY_COST_RULES: OverlayRule[] = [
+  { rule: 'eslint(complexity)', message: 'cyclomatic complexity max 20' },
+  { rule: 'complexity(complexity)', message: 'cognitive complexity max 15' },
+]
 
 export type ReviewRow = BenefitRow | CostRow
 
@@ -400,7 +408,7 @@ function parseCostRow(raw: unknown): CostRow {
   if (!isRecord(raw) || raw['kind'] !== 'cost') throw new Error('review.jsonl: expected cost row')
   const { id, problem, arm, rep, checkpoint, findings } = raw
   if (typeof id !== 'string' || typeof problem !== 'string') throw new Error('review.jsonl cost row missing strings')
-  if (arm !== 'lint') throw new Error('review.jsonl cost row: arm must be lint')
+  if (arm !== 'lint' && arm !== 'lint-cc') throw new Error('review.jsonl cost row: arm must be an overlay arm')
   if (typeof rep !== 'number' || typeof checkpoint !== 'number') throw new Error('review.jsonl cost row missing numbers')
   if (!Array.isArray(findings)) throw new Error('review.jsonl cost row missing findings')
   return {
@@ -598,20 +606,39 @@ export function parseCostAnswer(text: string, files: Map<string, string>): CostF
   return out
 }
 
-export function costPrompt(specs: string[], files: SrcFile[], rules: OverlayRule[]): string {
-  return `You are reviewing a small program written while the following lint rules were in force. Find code that exists to satisfy one of those rules rather than because the spec needs it.
+export function costPrompt(
+  specs: string[],
+  files: SrcFile[],
+  rules: OverlayRule[],
+  mode: 'overlay' | 'complexity' = 'overlay',
+): string {
+  const intro =
+    mode === 'complexity'
+      ? `You are reviewing a small program written while function complexity caps were in force. Find code that exists to stay under those caps rather than because the spec needs it.
+
+Typical substitutions:
+- extra functions split out of a larger one
+- extracted helpers
+- lookup tables instead of branches
+
+Judge each against one bigger function that would have exceeded the cap.`
+      : `You are reviewing a small program written while the following lint rules were in force. Find code that exists to satisfy one of those rules rather than because the spec needs it.
 
 Typical substitutions:
 - type guards and rebuilt objects instead of \`as\`
 - \`?? default\` or explicit checks instead of \`!\`
 - process.stdout.write wrappers instead of console
-- src/lib/use-* hooks or URL/query state instead of useState/useEffect
+- src/lib/use-* hooks or URL/query state instead of useState/useEffect`
+
+  const vsWhat = mode === 'complexity' ? 'one bigger function' : 'the banned construct it replaces'
+  const vsShort = mode === 'complexity' ? 'one bigger function' : 'the banned construct'
+  return `${intro}
 
 Rules in force:
 ${formatOverlay(rules)}
 
-For each such piece of code, name the rule it satisfies, the file and line span, and a verdict against the banned construct it replaces:
-- better: clearer or smaller than the banned construct
+For each such piece of code, name the rule it satisfies, the file and line span, and a verdict against ${vsWhat}:
+- better: clearer or smaller than ${vsShort}
 - same: equivalent
 - worse: worse in clarity or size
 - bug: it introduced a defect. Name an input the spec allows that fails, so a person can run it (CLI argv after src/cli.ts, or the user action in a UI).
@@ -673,7 +700,7 @@ function withoutContent(files: SrcFile[]): SrcFile[] {
 }
 
 export function assertBlind(text: string, label: string): void {
-  if (/\b(plain|lint-arm|lint arm)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
+  if (/\b(plain|lint-arm|lint arm|lint-cc)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
   if (/grok/i.test(text)) throw new Error(`${label} leaks grok`)
   if (/\b(cursor-grok|gpt-5|claude-|gemini-)/i.test(text)) throw new Error(`${label} leaks a model id`)
 }
@@ -732,6 +759,7 @@ type CostJob = {
   files: SrcFile[]
   specs: string[]
   rules: OverlayRule[]
+  costKind: 'overlay' | 'complexity'
 }
 
 type Job = BenefitJob | CostJob
@@ -777,13 +805,15 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
       continue
     }
     if (doneCost.has(costKey({ id: ws.id, checkpoint: snap.checkpoint }))) continue
+    const costKind = ws.arm === 'lint-cc' ? 'complexity' : 'overlay'
     jobs.push({
       kind: 'cost',
       ws,
       checkpoint: snap.checkpoint,
       files: snap.files,
       specs: snap.specs,
-      rules: await overlayFor(snap.kindId),
+      rules: costKind === 'complexity' ? COMPLEXITY_COST_RULES : await overlayFor(snap.kindId),
+      costKind,
     })
   }
   const append = mutex()
@@ -817,15 +847,16 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
       return
     }
     process.stderr.write(`review cost ${job.ws.id}\n`)
-    const prompt = costPrompt(job.specs, job.files, job.rules)
-    assertBlind(costPrompt(job.specs, withoutContent(job.files), job.rules), 'cost prompt')
+    const prompt = costPrompt(job.specs, job.files, job.rules, job.costKind)
+    assertBlind(costPrompt(job.specs, withoutContent(job.files), job.rules, job.costKind), 'cost prompt')
     const answer = await askReviewer(prompt, opts.model)
     const findings = parseCostAnswer(answer, new Map(job.files.map(f => [f.path, f.content])))
+    if (job.ws.arm === 'plain') throw new Error('cost job on plain arm')
     const row: CostRow = {
       kind: 'cost',
       id: job.ws.id,
       problem: job.ws.problem,
-      arm: 'lint',
+      arm: job.ws.arm,
       rep: job.ws.rep,
       checkpoint: job.checkpoint,
       findings,
@@ -960,13 +991,19 @@ export function reviewMarkdown(
   const by = bucketsByRule(rows)
   const rules = [...by.keys()].sort()
   const benefitN = rows.filter(r => r.kind === 'benefit').length
-  const costN = rows.filter(r => r.kind === 'cost').length
+  const costRows = rows.filter((r): r is CostRow => r.kind === 'cost')
+  const costN = costRows.length
+  const costArms = [...new Set(costRows.map(r => r.arm))]
+  const costLabel =
+    costArms.length === 1 && costArms[0] === 'lint'
+      ? `${costN} lint-arm snapshots.`
+      : `${costN} overlay snapshots.`
   const lines: string[] = [
     '# Rule review',
     '',
     checkpointLabel,
     `Reviewer model \`${meta.model}\`.`,
-    `${benefitN} plain-arm lint hits, ${costN} lint-arm snapshots.`,
+    `${benefitN} plain-arm lint hits, ${costLabel}`,
     '',
     '## Net verdict',
     '',
@@ -1145,6 +1182,13 @@ export async function selfCheckReview(): Promise<void> {
   if (!cPrompt.includes('eslint(no-console)')) throw new Error('cost prompt missing overlay rules')
   if (!cPrompt.includes('process.stdout.write')) throw new Error('cost prompt missing substitutions')
   if (cPrompt.includes(EVALS_DIR) || cPrompt.includes(METRICS_PLUGIN)) throw new Error('cost prompt leaks repo paths')
+
+  const ccPrompt = costPrompt(['Print a total.'], srcFiles, COMPLEXITY_COST_RULES, 'complexity')
+  assertBlind(ccPrompt, 'complexity cost self-check prompt')
+  if (!ccPrompt.includes('extracted helpers')) throw new Error('complexity cost prompt missing substitutions')
+  if (!ccPrompt.includes('eslint(complexity)')) throw new Error('complexity cost prompt missing cyclomatic rule')
+  if (!ccPrompt.includes('complexity(complexity)')) throw new Error('complexity cost prompt missing cognitive rule')
+  if (/\blint-cc\b/.test(ccPrompt)) throw new Error('complexity cost prompt leaks lint-cc')
 
   if (normalizeRule('typescript/no-non-null-assertion') !== 'typescript(no-non-null-assertion)') {
     throw new Error('normalizeRule slash')
