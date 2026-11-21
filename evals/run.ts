@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { appendFile, mkdir, readFile, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { finished } from 'node:stream/promises'
 import {
@@ -182,14 +182,19 @@ async function runAgent(
 
 async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
   const q = items.slice()
+  const errors: unknown[] = []
   const workers = Array.from({ length: Math.min(n, Math.max(q.length, 1)) }, async () => {
     for (;;) {
       const item = q.shift()
       if (item === undefined) return
-      await fn(item)
+      await fn(item).catch((err: unknown) => {
+        errors.push(err)
+        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`)
+      })
     }
   })
   await Promise.all(workers)
+  if (errors.length > 0) throw new AggregateError(errors, `${errors.length} job(s) failed; rerun with --out to resume`)
 }
 
 async function prepareWorkspace(dest: string, arm: ArmId, kindId: string): Promise<void> {
@@ -243,15 +248,15 @@ async function runJob(runDir: string, model: string, timeoutMs: number, job: Job
     await git(ws, ['add', '-A'])
     await git(ws, ['commit', '--allow-empty', '-m', `v${n}`])
     await git(ws, ['tag', '-f', `v${n}`])
-    await git(ws, ['bundle', 'create', join(runDir, job.row.bundle), '--all'])
   }
+  await git(ws, ['bundle', 'create', join(runDir, job.row.bundle), '--all'])
 }
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
   const problems: Problem[] = []
   for (const slug of opts.problems) problems.push(await loadProblem(slug))
-  const runDir = opts.out ?? join(EVALS_DIR, 'runs', stamp())
+  const runDir = resolve(opts.out ?? join(EVALS_DIR, 'runs', stamp()))
   await mkdir(runDir, { recursive: true })
   let manifest: Manifest
   try {
@@ -290,7 +295,11 @@ async function main(): Promise<void> {
     }
   }
   await writeJson(join(runDir, 'manifest.json'), manifest)
-  await pool(jobs, opts.concurrency, job => runJob(runDir, opts.model, opts.timeoutMs, job))
+  await pool(jobs, opts.concurrency, job =>
+    runJob(runDir, opts.model, opts.timeoutMs, job).catch((err: unknown) => {
+      throw new Error(`${job.row.id}: ${err instanceof Error ? err.message : String(err)}`)
+    }),
+  )
   process.stdout.write(`${runDir}\n`)
 }
 
