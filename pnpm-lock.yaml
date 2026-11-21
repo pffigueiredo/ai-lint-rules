@@ -44,6 +44,9 @@ importers:
       oxlint:
         specifier: 1.83.0
         version: 1.83.0(oxlint-tsgolint@7.0.2007)
+      oxlint-plugin-complexity:
+        specifier: 4.1.0
+        version: 4.1.0(estree-walker@3.0.3)(oxc-parser@0.156.0)
       oxlint-tsgolint:
         specifier: ^7.0.2007
         version: 7.0.2007
@@ -1612,6 +1615,21 @@ packages:
 
   oxc-resolver@11.24.2:
     resolution: {integrity: sha512-FY91FiDBj7ls5MsFS9jN3tjz2o0/zsdSsymlakySaBwVJZorHhkWyICLZMKxlu1R9vYo+sd3z1jwb4J8x7bNDw==}
+
+  oxlint-plugin-complexity@4.1.0:
+    resolution: {integrity: sha512-VaB/x+g7ZW+VlLjSPLN2wrxYCFM1RHA50jL0JOuYJALtXKeF7mXMsjVaLKklI3uNMFcbaWLxVHD2GOzgU2xrYQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      diff: '>=5.0.0'
+      estree-walker: '>=3.0.0'
+      oxc-parser: '>=0.60.0'
+    peerDependenciesMeta:
+      diff:
+        optional: true
+      estree-walker:
+        optional: true
+      oxc-parser:
+        optional: true
 
   oxlint-tsgolint@7.0.2007:
     resolution: {integrity: sha512-i8X2qf6VVqFzoNVP34joMKuZpO6T2uXMOgKJaSPFc6p+E3FTnbIGPRbI8K4ZApmtDTMu2CIeGfpzeK1zzGwfnA==}
@@ -3278,6 +3296,13 @@ snapshots:
       '@oxc-resolver/binding-wasm32-wasi': 11.24.2
       '@oxc-resolver/binding-win32-arm64-msvc': 11.24.2
       '@oxc-resolver/binding-win32-x64-msvc': 11.24.2
+
+  oxlint-plugin-complexity@4.1.0(estree-walker@3.0.3)(oxc-parser@0.156.0):
+    dependencies:
+      '@oxlint/plugins': 1.83.0
+    optionalDependencies:
+      estree-walker: 3.0.3
+      oxc-parser: 0.156.0
 
   oxlint-tsgolint@7.0.2007:
     optionalDependencies:

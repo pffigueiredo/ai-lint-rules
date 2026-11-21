@@ -20,6 +20,7 @@
     "jsdom": "31.0.1",
     "knip": "6.45.1",
     "oxlint": "1.83.0",
+    "oxlint-plugin-complexity": "4.1.0",
     "oxlint-tsgolint": "^7.0.2007",
     "supercluster": "^9.1.0",
     "typescript": "^7.0.2",
