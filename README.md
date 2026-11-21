@@ -239,9 +239,9 @@ On the lint arm, the reviewer sees the overlay rules and their messages from the
 
 `review.md` has one table per rule with plain-hit counts, `% bug` / `% fragile` / `% style` / `% noise`, lint-arm workaround counts, `% better` / `% same` / `% worse` / `% bug`, a net verdict, and two or three examples per side. The net verdict is computed:
 
-- **earns its place:** at least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.
-- **costs more than it catches:** lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.
-- **neutral:** anything else.
+- earns its place. At least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.
+- costs more than it catches. Lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.
+- neutral. Anything else.
 
 `review.jsonl` holds every verdict. Rerun the same command to resume. Snapshots and hits already in the file are skipped.
 

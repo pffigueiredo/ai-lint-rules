@@ -967,9 +967,9 @@ export function reviewMarkdown(
     '',
     'Computed from the reviewer verdicts, not re-judged.',
     '',
-    '- **earns its place:** at least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.',
-    '- **costs more than it catches:** lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.',
-    '- **neutral:** anything else.',
+    '- earns its place. At least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.',
+    '- costs more than it catches. Lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.',
+    '- neutral. Anything else.',
     '',
   ]
   if (rules.length === 0) {
