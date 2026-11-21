@@ -647,7 +647,7 @@ function summaryMarkdown(rows: Row[]): string {
   const lines: string[] = [
     '# Summary',
     '',
-    'Question: do the TypeScript rules help, plain vs lint, in iterative runs?',
+    'Question: do the lint rules help, plain vs lint, in iterative runs?',
     '',
     'Outcome metrics can show help or harm. Compliance metrics only show whether the lint arm followed or gamed the rules. Full SlopCodeBench erosion (complexity + lint/LOC) stays in `results.jsonl` and is not an outcome.',
     '',
