@@ -85,6 +85,86 @@ export async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
 }
 
+export type CursorAgentStatus = 'ok' | 'timeout' | 'stalled' | 'error'
+
+export function killProcessGroup(pid: number | undefined): void {
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ESRCH') return
+    throw err
+  }
+}
+
+export function spawnCursorAgent(opts: {
+  args: readonly string[]
+  cwd: string
+  timeoutMs: number
+  stallMs?: number
+  onStdout?: (chunk: string) => void
+}): Promise<{ status: CursorAgentStatus; stdout: string; error?: string | undefined }> {
+  return new Promise(resolve => {
+    let stdout = ''
+    let timedOut = false
+    let stalled = false
+    let spawnErr: string | undefined
+    let settled = false
+    const proc = spawn('cursor-agent', [...opts.args], {
+      cwd: opts.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    })
+    const pid = proc.pid
+    let stallTimer: ReturnType<typeof setTimeout> | undefined
+    const settle = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (stallTimer !== undefined) clearTimeout(stallTimer)
+      killProcessGroup(pid)
+      const status: CursorAgentStatus = timedOut
+        ? 'timeout'
+        : stalled
+          ? 'stalled'
+          : spawnErr !== undefined
+            ? 'error'
+            : 'ok'
+      resolve({ status, stdout, error: spawnErr })
+    }
+    const armStall = (): void => {
+      if (opts.stallMs === undefined) return
+      if (stallTimer !== undefined) clearTimeout(stallTimer)
+      stallTimer = setTimeout(() => {
+        if (settled || timedOut) return
+        stalled = true
+        killProcessGroup(pid)
+      }, opts.stallMs)
+    }
+    proc.stdout.setEncoding('utf8')
+    proc.stderr.resume()
+    proc.stdout.on('data', (chunk: string) => {
+      stdout += chunk
+      opts.onStdout?.(chunk)
+      armStall()
+    })
+    proc.stdout.on('error', () => undefined)
+    const timer = setTimeout(() => {
+      if (settled || stalled) return
+      timedOut = true
+      killProcessGroup(pid)
+    }, opts.timeoutMs)
+    armStall()
+    proc.on('error', err => {
+      spawnErr = err instanceof Error ? err.message : String(err)
+      settle()
+    })
+    proc.on('close', () => {
+      settle()
+    })
+  })
+}
+
 export function capture(
   cmd: string,
   args: string[],
@@ -144,6 +224,19 @@ export function assembleCheckRun(iso: CaseResult[], regression: CaseResult[]): C
       regression: regression.length === 0 ? 1 : regression.filter(r => r.pass).length / regression.length,
     },
   }
+}
+
+export async function listCheckpointTags(ws: string): Promise<number[]> {
+  const ran = await capture('git', ['tag', '-l', 'v*'], { cwd: ws, timeoutMs: 30_000 })
+  const ns: number[] = []
+  for (const line of ran.stdout.split('\n')) {
+    const m = /^v(\d+)$/.exec(line.trim())
+    if (m === null) continue
+    const n = Number(m[1])
+    if (n >= 1) ns.push(n)
+  }
+  ns.sort((a, b) => a - b)
+  return ns
 }
 
 export async function listProblemSlugs(): Promise<string[]> {

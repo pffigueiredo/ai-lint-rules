@@ -16,6 +16,7 @@ import {
   copySolution,
   findLeak,
   isRecord,
+  listCheckpointTags,
   listProblemSlugs,
   readJson,
   writeJson,
@@ -28,7 +29,7 @@ const BIN = {
   git: 'git',
 }
 
-type AgentStatus = 'ok' | 'timeout' | 'error' | 'missing'
+type AgentStatus = 'ok' | 'timeout' | 'stalled' | 'error' | 'missing'
 
 type AgentStats = {
   durationMs: number
@@ -267,6 +268,7 @@ function parseAgentLog(text: string): AgentStats {
   let reasoningTokens = 0
   let hasResult = false
   let timedOut = false
+  let stalled = false
   let isError = false
   for (const line of text.split('\n')) {
     if (line.includes('pnpm check') || line.includes('pnpm run check')) ranCheck = true
@@ -282,6 +284,7 @@ function parseAgentLog(text: string): AgentStats {
     if (ev['type'] !== 'result') continue
     hasResult = true
     timedOut = ev['timed_out'] === true
+    stalled = ev['stalled'] === true
     isError = ev['is_error'] === true || ev['subtype'] === 'error'
     if (typeof ev['duration_ms'] === 'number') durationMs = ev['duration_ms']
     const usage = ev['usage']
@@ -292,7 +295,15 @@ function parseAgentLog(text: string): AgentStats {
     if (typeof usage['cacheWriteTokens'] === 'number') cacheWriteTokens = usage['cacheWriteTokens']
     if (typeof usage['reasoningTokens'] === 'number') reasoningTokens = usage['reasoningTokens']
   }
-  const status: AgentStatus = timedOut ? 'timeout' : !hasResult ? 'missing' : isError ? 'error' : 'ok'
+  const status: AgentStatus = timedOut
+    ? 'timeout'
+    : stalled
+      ? 'stalled'
+      : !hasResult
+        ? 'missing'
+        : isError
+          ? 'error'
+          : 'ok'
   return {
     durationMs,
     inputTokens,
@@ -323,19 +334,6 @@ async function numstat(ws: string, fromRef: string, toRef: string): Promise<{ ad
     if (Number.isFinite(r)) removed += r
   }
   return { added, removed }
-}
-
-async function listCheckpointTags(ws: string): Promise<number[]> {
-  const ran = await git(ws, ['tag', '-l', 'v*'])
-  const ns: number[] = []
-  for (const line of ran.stdout.split('\n')) {
-    const m = /^v(\d+)$/.exec(line.trim())
-    if (m === null) continue
-    const n = Number(m[1])
-    if (n >= 1) ns.push(n)
-  }
-  ns.sort((a, b) => a - b)
-  return ns
 }
 
 async function assertNoLeak(label: string, text: string): Promise<void> {
@@ -694,7 +692,7 @@ function complianceTable(plain: WsSummary[], lint: WsSummary[]): string[] {
 function failedCalls(rows: Row[]): string[] {
   const bad = rows.filter(r => r.agentStatus !== 'ok')
   const lines = [
-    `Failed or timed-out agent calls: ${bad.length}/${rows.length}. These rows stay in the rates.`,
+    `Failed, timed-out, or stalled agent calls: ${bad.length}/${rows.length}. These rows stay in the rates.`,
     '',
   ]
   if (bad.length === 0) {

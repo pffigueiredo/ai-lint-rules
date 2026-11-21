@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { appendFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { finished } from 'node:stream/promises'
@@ -14,6 +13,7 @@ import {
   capture,
   findLeak,
   parseManifest,
+  spawnCursorAgent,
   writeJson,
 } from './lib.ts'
 import { getKind, loadProblem, materializeArm } from './kinds.ts'
@@ -26,6 +26,7 @@ type Opts = {
   checkpoints: number | undefined
   concurrency: number
   timeoutMs: number
+  stallMs: number
   out: string | undefined
 }
 
@@ -54,6 +55,7 @@ function parseArgs(argv: string[]): Opts {
   const checkpointsRaw = flagOnce(argv, '--checkpoints')
   const concurrencyRaw = flagOnce(argv, '--concurrency')
   const timeoutRaw = flagOnce(argv, '--timeout-min')
+  const stallRaw = flagOnce(argv, '--stall-min')
   const out = flagOnce(argv, '--out')
   if (problems.length === 0) throw new Error('need --problem <slug>')
   if (armRaw.length === 0) throw new Error('need --arm plain|lint')
@@ -73,7 +75,19 @@ function parseArgs(argv: string[]): Opts {
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('--concurrency must be a positive integer')
   const timeoutMin = Number(timeoutRaw ?? '20')
   if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) throw new Error('--timeout-min must be a positive number')
-  return { problems, arms, reps, model, checkpoints, concurrency, timeoutMs: timeoutMin * 60_000, out }
+  const stallMin = Number(stallRaw ?? '6')
+  if (!Number.isFinite(stallMin) || stallMin <= 0) throw new Error('--stall-min must be a positive number')
+  return {
+    problems,
+    arms,
+    reps,
+    model,
+    checkpoints,
+    concurrency,
+    timeoutMs: timeoutMin * 60_000,
+    stallMs: stallMin * 60_000,
+    out,
+  }
 }
 
 function stamp(): string {
@@ -134,50 +148,31 @@ async function runAgent(
   model: string,
   logPath: string,
   timeoutMs: number,
-): Promise<'ok' | 'timeout' | 'error'> {
+  stallMs: number,
+): Promise<'ok' | 'timeout' | 'stalled' | 'error'> {
   await mkdir(dirname(logPath), { recursive: true })
   const out = createWriteStream(logPath)
-  let timedOut = false
-  let spawnErr: string | undefined
-  await new Promise<void>(resolve => {
-    const proc = spawn(
-      'cursor-agent',
-      ['-p', '--force', '--trust', '--output-format', 'stream-json', '--model', model, '--workspace', ws, prompt],
-      { cwd: ws, stdio: ['ignore', 'pipe', 'pipe'] },
-    )
-    proc.stdout.pipe(out, { end: false })
-    proc.stderr.resume()
-    const timer = setTimeout(() => {
-      timedOut = true
-      proc.kill('SIGKILL')
-    }, timeoutMs)
-    proc.on('error', err => {
-      spawnErr = err instanceof Error ? err.message : String(err)
-      clearTimeout(timer)
-      resolve()
-    })
-    proc.on('close', () => {
-      clearTimeout(timer)
-      resolve()
-    })
+  const ran = await spawnCursorAgent({
+    args: ['-p', '--force', '--trust', '--output-format', 'stream-json', '--model', model, '--workspace', ws, prompt],
+    cwd: ws,
+    timeoutMs,
+    stallMs,
+    onStdout: chunk => {
+      out.write(chunk)
+    },
   })
+  if (ran.status === 'timeout') {
+    out.write(`${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, timed_out: true })}\n`)
+  } else if (ran.status === 'stalled') {
+    out.write(`${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, stalled: true })}\n`)
+  } else if (ran.status === 'error') {
+    out.write(
+      `${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, error: ran.error ?? 'spawn failed' })}\n`,
+    )
+  }
   out.end()
   await finished(out).catch(() => undefined)
-  if (timedOut) {
-    await appendFile(
-      logPath,
-      `${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, timed_out: true })}\n`,
-    )
-    return 'timeout'
-  }
-  if (spawnErr !== undefined) {
-    await appendFile(
-      logPath,
-      `${JSON.stringify({ type: 'result', subtype: 'error', is_error: true, error: spawnErr })}\n`,
-    )
-    return 'error'
-  }
-  return 'ok'
+  return ran.status
 }
 
 async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -223,7 +218,7 @@ type Job = {
   row: WorkspaceRow
 }
 
-async function runJob(runDir: string, model: string, timeoutMs: number, job: Job): Promise<void> {
+async function runJob(runDir: string, model: string, timeoutMs: number, stallMs: number, job: Job): Promise<void> {
   let ws = job.row.workspaceDir
   try {
     await gitOut(ws, ['rev-parse', '--is-inside-work-tree'])
@@ -243,7 +238,7 @@ async function runJob(runDir: string, model: string, timeoutMs: number, job: Job
     await assertBlind(ws, prompt, kind.planted)
     const logPath = join(runDir, job.row.id, `agent-${n}.jsonl`)
     process.stderr.write(`${job.row.id} checkpoint ${n}\n`)
-    const status = await runAgent(ws, prompt, model, logPath, timeoutMs)
+    const status = await runAgent(ws, prompt, model, logPath, timeoutMs, stallMs)
     if (status !== 'ok') process.stderr.write(`${job.row.id} agent ${status}\n`)
     await git(ws, ['add', '-A'])
     await git(ws, ['commit', '--allow-empty', '-m', `v${n}`])
@@ -296,7 +291,7 @@ async function main(): Promise<void> {
   }
   await writeJson(join(runDir, 'manifest.json'), manifest)
   await pool(jobs, opts.concurrency, job =>
-    runJob(runDir, opts.model, opts.timeoutMs, job).catch((err: unknown) => {
+    runJob(runDir, opts.model, opts.timeoutMs, opts.stallMs, job).catch((err: unknown) => {
       throw new Error(`${job.row.id}: ${err instanceof Error ? err.message : String(err)}`)
     }),
   )
