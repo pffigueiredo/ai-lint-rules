@@ -1,11 +1,54 @@
 import { useState } from 'react'
-import type { FieldMessages, SignupDraft } from './parse'
+import {
+  emptyDraft,
+  emptyMessages,
+  parseSignupDraft,
+  type FieldMessages,
+  type SignupDraft,
+} from './parse'
 
-const emptyDraft: SignupDraft = { email: '', password: '', displayName: '' }
-const emptyMessages: FieldMessages = { email: '', password: '', displayName: '' }
+const KEY = 'signup-draft'
+
+type Box = {
+  draft: SignupDraft
+  stored: 'yes' | 'no'
+  messages: FieldMessages
+}
+
+function read(): { draft: SignupDraft; stored: 'yes' | 'no' } {
+  const raw = localStorage.getItem(KEY)
+  if (raw === null) return { draft: emptyDraft, stored: 'no' }
+  const draft = parseSignupDraft(raw)
+  if (draft === undefined) return { draft: emptyDraft, stored: 'no' }
+  return { draft, stored: 'yes' }
+}
 
 export function useSignupDraft() {
-  const [draft, setDraft] = useState(emptyDraft)
-  const [messages, setMessages] = useState(emptyMessages)
-  return { draft, setDraft, messages, setMessages }
+  const [box, setBox] = useState<Box>(() => {
+    const loaded = read()
+    return { draft: loaded.draft, stored: loaded.stored, messages: emptyMessages }
+  })
+
+  function setDraft(next: SignupDraft): void {
+    localStorage.setItem(KEY, JSON.stringify(next))
+    setBox(current => ({ ...current, draft: next, stored: 'yes' }))
+  }
+
+  function setMessages(messages: FieldMessages): void {
+    setBox(current => ({ ...current, messages }))
+  }
+
+  function discard(): void {
+    localStorage.removeItem(KEY)
+    setBox({ draft: emptyDraft, stored: 'no', messages: emptyMessages })
+  }
+
+  return {
+    draft: box.draft,
+    setDraft,
+    messages: box.messages,
+    setMessages,
+    stored: box.stored,
+    discard,
+  }
 }

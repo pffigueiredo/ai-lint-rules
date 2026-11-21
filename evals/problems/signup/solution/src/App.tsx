@@ -1,10 +1,11 @@
 import type { FormEvent } from 'react'
-import { fieldMessages, hasMessages } from './lib/parse'
+import { emptyMessages, fieldMessages, hasMessages, SignupInvalidError } from './lib/parse'
 import { usePasswordReveal } from './lib/use-password-reveal'
 import { useProfile, useSaveProfile } from './lib/use-profile'
 import { useSearchParams, writeParam } from './lib/use-search-params'
 import { useSignup } from './lib/use-signup'
 import { useSignupDraft } from './lib/use-signup-draft'
+import { useUsernameAvailability } from './lib/use-username'
 
 function SignupForm() {
   const [params, setParams] = useSearchParams()
@@ -18,13 +19,19 @@ function SignupForm() {
   const showName = step === undefined || step === 3
   const showSubmit = step === undefined || step === 3
   const draft = draftState.draft
-  const messages = draftState.messages
+  const check = useUsernameAvailability(draft.username)
+  const server = signup.error instanceof SignupInvalidError ? signup.error.fieldErrors : emptyMessages
+  const emailMsg = server.email.length > 0 ? server.email : draftState.messages.email
+  const passwordMsg = server.password.length > 0 ? server.password : draftState.messages.password
+  const nameMsg = server.displayName.length > 0 ? server.displayName : draftState.messages.displayName
+  const usernameMsg = server.username.length > 0 ? server.username : draftState.messages.username
+  const submitBlocked = check.waiting || check.taken || check.failed
 
   function onSubmit(e: FormEvent): void {
     e.preventDefault()
     const next = fieldMessages(draft)
     draftState.setMessages(next)
-    if (hasMessages(next)) return
+    if (hasMessages(next) || submitBlocked) return
     signup.mutate(draft)
   }
 
@@ -66,9 +73,22 @@ function SignupForm() {
           />
         </div>
       ) : null}
-      {messages.email.length > 0 ? <p>{messages.email}</p> : null}
-      {messages.password.length > 0 ? <p>{messages.password}</p> : null}
-      {messages.displayName.length > 0 ? <p>{messages.displayName}</p> : null}
+      <div>
+        <label htmlFor="username">Username</label>
+        <input
+          id="username"
+          value={draft.username}
+          onChange={e => draftState.setDraft({ ...draft, username: e.target.value })}
+        />
+      </div>
+      {emailMsg.length > 0 ? <p>{emailMsg}</p> : null}
+      {passwordMsg.length > 0 ? <p>{passwordMsg}</p> : null}
+      {nameMsg.length > 0 ? <p>{nameMsg}</p> : null}
+      {usernameMsg.length > 0 ? <p>{usernameMsg}</p> : null}
+      {check.waiting ? <p>Checking username</p> : null}
+      {check.taken ? <p>Username is taken</p> : null}
+      {check.available ? <p>Username is available</p> : null}
+      {check.failed ? <p>Could not check username</p> : null}
       {step === 2 || step === 3 ? (
         <button type="button" onClick={() => setParams(writeParam(params, 'step', String((step ?? 1) - 1)))}>
           Back
@@ -79,8 +99,19 @@ function SignupForm() {
           Next
         </button>
       ) : null}
-      {showSubmit ? <button type="submit">Create account</button> : null}
-      {signup.isError ? <div role="alert">Could not create account</div> : null}
+      {showSubmit ? (
+        <button type="submit" disabled={submitBlocked}>
+          Create account
+        </button>
+      ) : null}
+      {draftState.stored === 'yes' ? (
+        <button type="button" onClick={draftState.discard}>
+          Discard draft
+        </button>
+      ) : null}
+      {signup.isError && !(signup.error instanceof SignupInvalidError) ? (
+        <div role="alert">Could not create account</div>
+      ) : null}
     </form>
   )
 }

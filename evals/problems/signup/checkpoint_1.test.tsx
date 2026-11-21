@@ -20,12 +20,14 @@ function stubApi(opts?: { signupStatus?: number }): void {
 
 beforeEach(() => {
   setPath('/')
+  localStorage.clear()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   setPath('/')
+  localStorage.clear()
 })
 
 describe('core', () => {
@@ -53,9 +55,10 @@ describe('core', () => {
     const post = fetchMock.mock.calls.find(([input, init]) => {
       return requestPath(input as RequestInfo | URL) === '/api/signup' && requestMethod(init as RequestInit) === 'POST'
     })
-    expect(post?.[1] && (post[1] as RequestInit).body).toBe(
-      JSON.stringify({ email: 'ada@example.com', password: 'secretsecret', displayName: 'Ada' }),
-    )
+    const body = JSON.parse(String((post?.[1] as RequestInit | undefined)?.body)) as Record<string, unknown>
+    expect(body['email']).toBe('ada@example.com')
+    expect(body['password']).toBe('secretsecret')
+    expect(body['displayName']).toBe('Ada')
   })
 })
 

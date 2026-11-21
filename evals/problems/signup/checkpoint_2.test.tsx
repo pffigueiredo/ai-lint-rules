@@ -31,12 +31,14 @@ function query(): URLSearchParams {
 
 beforeEach(() => {
   setPath('/')
+  localStorage.clear()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   setPath('/')
+  localStorage.clear()
 })
 
 describe('core', () => {
