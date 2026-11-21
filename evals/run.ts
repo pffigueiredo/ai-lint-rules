@@ -114,7 +114,7 @@ async function assertBlind(ws: string, prompt: string, planted: readonly string[
   for (const rel of planted) {
     let body: string
     try {
-      body = await readFile(join(ws, rel), 'utf8')
+      body = await gitOut(ws, ['show', `v0:${rel}`])
     } catch {
       continue
     }
