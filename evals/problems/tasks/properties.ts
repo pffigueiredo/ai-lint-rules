@@ -1,6 +1,6 @@
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import fc from 'fast-check'
 import { type Capture, capture, isRecord } from '../../lib.ts'
@@ -420,18 +420,24 @@ function isMutating(args: readonly string[]): boolean {
   return cmd === 'add' || cmd === 'done' || cmd === 'block'
 }
 
-async function readStoreFile(cwd: string): Promise<string | undefined> {
-  try {
-    return await readFile(join(cwd, 'tasks.json'), 'utf8')
-  } catch {
-    return undefined
+// The spec fixes only `tasks.json`; implementations may keep undo history in other files, so a probe restores the whole cwd.
+async function snapshotDir(cwd: string): Promise<Map<string, Buffer>> {
+  const files = new Map<string, Buffer>()
+  for (const entry of await readdir(cwd, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    const path = join(entry.parentPath, entry.name)
+    files.set(path, await readFile(path))
   }
+  return files
 }
 
-async function restoreStoreFile(cwd: string, snap: string | undefined): Promise<void> {
-  const path = join(cwd, 'tasks.json')
-  if (snap === undefined) await rm(path, { force: true })
-  else await writeFile(path, snap)
+async function restoreDir(cwd: string, snap: Map<string, Buffer>): Promise<void> {
+  await rm(cwd, { recursive: true, force: true })
+  await mkdir(cwd, { recursive: true })
+  for (const [path, body] of snap) {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, body)
+  }
 }
 
 async function checkFailUndo(
@@ -452,10 +458,10 @@ async function checkFailUndo(
   }
   const expected = m.undoStack[m.undoStack.length - 1]
   if (expected === undefined) return
-  const snap = await readStoreFile(r.cwd)
+  const snap = await snapshotDir(r.cwd)
   const undoCap = await exec(r, ['undo'])
   const afterUndo = await observe(property, r)
-  await restoreStoreFile(r.cwd, snap)
+  await restoreDir(r.cwd, snap)
   if (undoCap.code === 0 && !sameObs(afterUndo, expected)) {
     r.ran.push('undo')
     fail(

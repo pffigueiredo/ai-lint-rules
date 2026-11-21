@@ -53,6 +53,10 @@ node src/cli.ts add a --today 2024-03-15
 
 If that replay breaks the spec sentence named in the failure, the CLI is wrong. If a command in the sequence is not a legal invocation, or the expected value is not what the spec says, fix `evals/problems/tasks/properties.ts`. Do not edit `evals/problems/tasks/solution` unless the user asked.
 
+If the replay passes but the suite still fails, suspect the harness's probes before the CLI. The spec only fixes `tasks.json`, and agents keep undo history in other files (`undo.json`, `tasks.undo.json`), so anything that saves and restores state around a probe must cover the whole cwd. A probe that restored only `tasks.json` once reported false `fail-is-noop` breaches on exactly the snapshots with an undo sidecar.
+
+In zsh, replay with `node src/cli.ts ${=line}` when the command sits in a variable; plain `$line` passes the whole command as one argument.
+
 ## Spec changed on purpose
 
 If `checkpoint_*.md` changes the promise:
