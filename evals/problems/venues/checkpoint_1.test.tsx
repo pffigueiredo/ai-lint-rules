@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import App from './src/App'
 import { jsonResponse, renderApp, requestPath, setPath } from './render-app.tsx'
 
@@ -74,6 +74,17 @@ describe('error', () => {
     renderApp(<App />)
     expect(await screen.findByRole('alert')).toBeTruthy()
     expect(screen.getByText('Could not load venues')).toBeTruthy()
+  })
+
+  it('does not retry a failed list request', async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new Error('offline')))
+    vi.stubGlobal('fetch', fetchMock)
+    renderApp(<App />)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    await waitFor(() => {
+      const list = fetchMock.mock.calls.filter(([input]) => requestPath(input as RequestInfo | URL) === '/api/venues')
+      expect(list).toHaveLength(1)
+    })
   })
 })
 

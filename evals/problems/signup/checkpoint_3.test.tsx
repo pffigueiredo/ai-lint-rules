@@ -99,4 +99,40 @@ describe('functionality', () => {
       expect(query().get('step')).toBe('1')
     })
   })
+
+  it('shows password, show hide, Back, and Next on step 2', async () => {
+    setPath('/?step=2')
+    stubApi()
+    renderApp(<App />)
+    expect(await screen.findByLabelText('Password')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show password' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Create account' })).toBeNull()
+  })
+
+  it('moves from step 2 to step 3 on Next', async () => {
+    setPath('/?step=2')
+    stubApi()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    await waitFor(() => {
+      expect(query().get('step')).toBe('3')
+    })
+    expect(screen.getByLabelText('Display name')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeTruthy()
+  })
+
+  it('keeps other query params when step changes', async () => {
+    setPath('/?step=1&mode=view')
+    stubApi()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    await waitFor(() => {
+      expect(query().get('step')).toBe('2')
+    })
+    expect(query().get('mode')).toBe('view')
+  })
 })

@@ -135,4 +135,53 @@ describe('functionality', () => {
       expect(query().get('open')).toBe('1')
     })
   })
+
+  it('removes q when Search is cleared', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await screen.findByLabelText('Search')
+    await user.type(screen.getByLabelText('Search'), 'lis')
+    await waitFor(() => {
+      expect(query().get('q')).toBe('lis')
+    })
+    await user.clear(screen.getByLabelText('Search'))
+    await waitFor(() => {
+      expect(query().get('q')).toBeNull()
+    })
+  })
+
+  it('removes open when Open now is unchecked', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.click(await screen.findByLabelText('Open now'))
+    await waitFor(() => {
+      expect(query().get('open')).toBe('1')
+    })
+    await user.click(screen.getByLabelText('Open now'))
+    await waitFor(() => {
+      expect(query().get('open')).toBeNull()
+    })
+  })
+
+  it('matches Search without regard to letter case', async () => {
+    stubList()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Harbor' })).toBeTruthy()
+    await user.type(screen.getByLabelText('Search'), 'LIS')
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+    })
+    expect(screen.getByRole('button', { name: 'Moonlight' })).toBeTruthy()
+  })
+
+  it('sorts by name then id when Sort is missing from the URL', async () => {
+    stubList()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Atlas' })).toBeTruthy()
+    const names = screen.getAllByRole('button').map(el => el.textContent)
+    expect(names).toEqual(['Atlas', 'Harbor', 'Moonlight'])
+  })
 })

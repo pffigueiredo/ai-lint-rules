@@ -125,6 +125,48 @@ describe('functionality', () => {
     expect(screen.getByText('22:00-04:00')).toBeTruthy()
   })
 
+  it('hides the details region when venue is missing from the URL', async () => {
+    stubApi()
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Moonlight' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Venue details' })).toBeNull()
+  })
+
+  it('keeps q in the URL when a venue is opened', async () => {
+    setPath('/?q=lis')
+    stubApi()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Moonlight' }))
+    await waitFor(() => {
+      expect(query().get('venue')).toBe('v1')
+    })
+    expect(query().get('q')).toBe('lis')
+  })
+
+  it('shows Loading venue while details are in flight', async () => {
+    let resolve!: (value: Response) => void
+    const pending = new Promise<Response>(r => {
+      resolve = r
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = requestPath(input)
+        const method = requestMethod(init)
+        if (path === '/api/venues' && method === 'GET') return jsonResponse({ venues: VENUES })
+        if (path === '/api/favorites' && method === 'GET') return jsonResponse({ ids: [] })
+        if (path === '/api/venues/v1' && method === 'GET') return pending
+        return jsonResponse({ error: 'missing' }, 404)
+      }),
+    )
+    setPath('/?venue=v1')
+    renderApp(<App />)
+    expect(await screen.findByText('Loading venue')).toBeTruthy()
+    resolve(jsonResponse(DETAILS.v1))
+    expect(await screen.findByRole('heading', { name: 'Moonlight' })).toBeTruthy()
+  })
+
   it('posts to /api/favorites/v1', async () => {
     stubApi()
     const user = userEvent.setup()

@@ -93,6 +93,38 @@ describe('error', () => {
 })
 
 describe('functionality', () => {
+  it('rejects an email with no @', async () => {
+    stubApi()
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.type(await screen.findByLabelText('Email'), 'ada.example.com')
+    await user.type(screen.getByLabelText('Password'), 'secretsecret')
+    await user.type(screen.getByLabelText('Display name'), 'Ada')
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByText('Enter an email')).toBeTruthy()
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>
+    const post = fetchMock.mock.calls.find(([input, init]) => {
+      return requestPath(input as RequestInfo | URL) === '/api/signup' && requestMethod(init as RequestInit) === 'POST'
+    })
+    expect(post).toBeUndefined()
+  })
+
+  it('does not retry a failed signup', async () => {
+    stubApi({ signupStatus: 500 })
+    const user = userEvent.setup()
+    renderApp(<App />)
+    await user.type(await screen.findByLabelText('Email'), 'ada@example.com')
+    await user.type(screen.getByLabelText('Password'), 'secretsecret')
+    await user.type(screen.getByLabelText('Display name'), 'Ada')
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>
+    const posts = fetchMock.mock.calls.filter(([input, init]) => {
+      return requestPath(input as RequestInfo | URL) === '/api/signup' && requestMethod(init as RequestInit) === 'POST'
+    })
+    expect(posts).toHaveLength(1)
+  })
+
   it('rejects a short password and a missing display name', async () => {
     stubApi()
     const user = userEvent.setup()
