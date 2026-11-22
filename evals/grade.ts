@@ -707,6 +707,50 @@ async function selfCheckLintCc(): Promise<void> {
   }
 }
 
+async function selfCheckLintUrl(): Promise<void> {
+  for (const kindId of ['cli', 'react'] as const) {
+    const dest = await mkdtemp(join(tmpdir(), `${kindId}-urlarm-`))
+    try {
+      if (dest.includes('lint-url')) throw new Error('lint-url self-check: tmp path contains arm name')
+      await materializeArm(dest, 'lint-url', kindId)
+      const kind = getKind(kindId)
+      await assertPlantedBlind(dest, kind)
+      for (const rel of kind.planted) {
+        let body: string
+        try {
+          body = await readFile(join(dest, rel), 'utf8')
+        } catch {
+          continue
+        }
+        if (rel.includes('lint-url') || body.includes('lint-url')) {
+          throw new Error(`${rel} contains the arm name`)
+        }
+      }
+      const cfg = await readJson(join(dest, '.oxlintrc.json'))
+      if (!isRecord(cfg) || !isRecord(cfg['rules'])) throw new Error('lint-url oxlintrc missing rules')
+      const rules = cfg['rules']
+      if (kindId === 'react') {
+        if (rules['ai/url-state-in-lib'] !== 'error') throw new Error('lint-url react missing url-state-in-lib')
+      } else if (rules['ai/url-state-in-lib'] !== undefined) {
+        throw new Error('lint-url cli should not add url-state-in-lib')
+      }
+    } finally {
+      await rm(dest, { recursive: true, force: true })
+    }
+  }
+  const lintReact = await mkdtemp(join(tmpdir(), 'react-lintctrl-'))
+  try {
+    await materializeArm(lintReact, 'lint', 'react')
+    const cfg = await readJson(join(lintReact, '.oxlintrc.json'))
+    if (!isRecord(cfg) || !isRecord(cfg['rules'])) throw new Error('lint react oxlintrc missing rules')
+    if (cfg['rules']['ai/url-state-in-lib'] !== undefined) {
+      throw new Error('lint react should drop url-state-in-lib')
+    }
+  } finally {
+    await rm(lintReact, { recursive: true, force: true })
+  }
+}
+
 async function selfCheckKnip(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'knip-fix-'))
   try {
@@ -745,12 +789,16 @@ async function selfCheck(): Promise<void> {
   await selfCheckLintCc()
   process.stderr.write('self-check lint-v2 overlay\n')
   await selfCheckLintV2()
+  process.stderr.write('self-check lint-url overlay\n')
+  await selfCheckLintUrl()
   for (const slug of slugs) {
     const problem = await loadProblem(slug)
     process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
-  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, lint-cc, lint-v2, pool\n`)
+  process.stdout.write(
+    `self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, lint-cc, lint-v2, lint-url, pool\n`,
+  )
 }
 
 async function loadManifest(runDir: string): Promise<Manifest> {

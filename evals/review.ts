@@ -757,7 +757,9 @@ function withoutContent(files: SrcFile[]): SrcFile[] {
 }
 
 export function assertBlind(text: string, label: string): void {
-  if (/\b(plain|lint-arm|lint arm|lint-cc|lint-v2)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
+  if (/\b(plain|lint-arm|lint arm|lint-cc|lint-v2|lint-url)\b/i.test(text)) {
+    throw new Error(`${label} leaks an arm name`)
+  }
   if (/grok/i.test(text)) throw new Error(`${label} leaks grok`)
   if (/\b(cursor-grok|gpt-5|claude-|gemini-)/i.test(text)) throw new Error(`${label} leaks a model id`)
 }
@@ -1289,6 +1291,19 @@ export async function selfCheckReview(): Promise<void> {
     throw new Error('lint-v2 react missing url-state-in-lib message')
   }
   if (!v2ReactIds.has('ai(no-use-effect)')) throw new Error('lint-v2 react dropped no-use-effect')
+  const lintReactPatched = await overlayRulesPatched('react', 'lint')
+  if (lintReactPatched.some(r => r.rule === 'ai(url-state-in-lib)')) {
+    throw new Error('lint react should drop url-state-in-lib')
+  }
+  const urlReact = await overlayRulesPatched('react', 'lint-url')
+  const urlRule = urlReact.find(r => r.rule === 'ai(url-state-in-lib)')
+  if (urlRule === undefined || !urlRule.message.includes('popstate')) {
+    throw new Error('lint-url react missing url-state-in-lib message')
+  }
+  const urlCli = await overlayRulesPatched('cli', 'lint-url')
+  if (urlCli.some(r => r.rule === 'ai(url-state-in-lib)')) {
+    throw new Error('lint-url cli should not add url-state-in-lib')
+  }
   if ((await overlayRulesForArm('cli', 'plain')).length !== 0) throw new Error('plain has no overlay rules')
   const ccCost = await overlayRulesForArm('cli', 'lint-cc')
   if (ccCost[0]?.rule !== 'eslint(complexity)') throw new Error('lint-cc cost rules should be complexity')
@@ -1300,6 +1315,13 @@ export async function selfCheckReview(): Promise<void> {
     leakThrew = true
   }
   if (!leakThrew) throw new Error('assertBlind should reject lint-v2')
+  leakThrew = false
+  try {
+    assertBlind('compared with lint-url', 'url leak')
+  } catch {
+    leakThrew = true
+  }
+  if (!leakThrew) throw new Error('assertBlind should reject lint-url')
   const v2Prompt = costPrompt(['Print a total.'], srcFiles, v2Cli)
   assertBlind(v2Prompt, 'lint-v2 cost prompt')
 

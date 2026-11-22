@@ -27,7 +27,7 @@ export type RulePatch = {
 
 export type KindPatchKey = 'cli' | 'react'
 
-export const ARM_IDS = ['plain', 'lint', 'lint-cc', 'lint-v2'] as const
+export const ARM_IDS = ['plain', 'lint', 'lint-cc', 'lint-v2', 'lint-url'] as const
 export type ArmId = (typeof ARM_IDS)[number]
 
 export type ArmSpec = {
@@ -57,7 +57,9 @@ export const ARMS: readonly ArmSpec[] = [
     tsReset: false,
     extraDeps: [],
     cost: 'overlay',
-    patch: {},
+    patch: {
+      react: { drop: ['ai/url-state-in-lib'] },
+    },
   },
   {
     id: 'lint-cc',
@@ -66,7 +68,9 @@ export const ARMS: readonly ArmSpec[] = [
     tsReset: false,
     extraDeps: [],
     cost: 'complexity',
-    patch: {},
+    patch: {
+      react: { drop: ['ai/url-state-in-lib'] },
+    },
   },
   {
     id: 'lint-v2',
@@ -84,6 +88,17 @@ export const ARMS: readonly ArmSpec[] = [
         add: { ...TYPE_AWARE_UNSAFE_RULES, 'ai/url-state-in-lib': 'error' },
         drop: ['ai/no-async-state', 'ai/no-boolean-state', 'ai/no-use-state'],
       },
+    },
+  },
+  {
+    id: 'lint-url',
+    overlay: true,
+    complexity: false,
+    tsReset: false,
+    extraDeps: [],
+    cost: 'overlay',
+    patch: {
+      react: { add: { 'ai/url-state-in-lib': 'error' } },
     },
   },
 ]
