@@ -1284,9 +1284,9 @@ export async function selfCheckReview(): Promise<void> {
   if (v2ReactIds.has('ai(no-use-state)')) throw new Error('lint-v2 react still has no-use-state')
   if (v2ReactIds.has('ai(no-async-state)')) throw new Error('lint-v2 react still has no-async-state')
   if (v2ReactIds.has('ai(no-boolean-state)')) throw new Error('lint-v2 react still has no-boolean-state')
-  const urlCopy = v2React.find(r => r.rule === 'ai(no-url-state-copy)')
-  if (urlCopy === undefined || !urlCopy.message.includes('URL')) {
-    throw new Error('lint-v2 react missing no-url-state-copy message')
+  const urlLib = v2React.find(r => r.rule === 'ai(url-state-in-lib)')
+  if (urlLib === undefined || !urlLib.message.includes('URL')) {
+    throw new Error('lint-v2 react missing url-state-in-lib message')
   }
   if (!v2ReactIds.has('ai(no-use-effect)')) throw new Error('lint-v2 react dropped no-use-effect')
   if ((await overlayRulesForArm('cli', 'plain')).length !== 0) throw new Error('plain has no overlay rules')

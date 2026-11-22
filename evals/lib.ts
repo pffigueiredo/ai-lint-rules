@@ -81,7 +81,7 @@ export const ARMS: readonly ArmSpec[] = [
         drop: ['no-console', 'typescript/no-non-null-assertion'],
       },
       react: {
-        add: { ...TYPE_AWARE_UNSAFE_RULES, 'ai/no-url-state-copy': 'error' },
+        add: { ...TYPE_AWARE_UNSAFE_RULES, 'ai/url-state-in-lib': 'error' },
         drop: ['ai/no-async-state', 'ai/no-boolean-state', 'ai/no-use-state'],
       },
     },
