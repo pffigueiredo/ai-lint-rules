@@ -1,10 +1,13 @@
-import { cp, mkdir } from 'node:fs/promises'
+import { cp, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   type ArmId,
   type Kind,
   type Problem,
+  type RulePatch,
+  getArm,
   isRecord,
+  kindPatch,
   loadProblem as loadProblemMeta,
   pinnedDep,
   readJson,
@@ -67,11 +70,59 @@ export async function applyComplexityOverlay(ws: string): Promise<void> {
   await writeJson(join(ws, 'package.json'), pkg)
 }
 
+export function applyRulePatch(cfg: Record<string, unknown>, patch: RulePatch | undefined): void {
+  if (patch === undefined) return
+  const rulesRaw = cfg['rules']
+  if (!isRecord(rulesRaw)) throw new Error('oxlintrc rules missing')
+  if (patch.drop !== undefined) {
+    for (const id of patch.drop) delete rulesRaw[id]
+    const overrides = cfg['overrides']
+    if (Array.isArray(overrides)) {
+      for (const o of overrides) {
+        if (!isRecord(o) || !isRecord(o['rules'])) continue
+        for (const id of patch.drop) delete o['rules'][id]
+      }
+    }
+  }
+  if (patch.add !== undefined) Object.assign(rulesRaw, patch.add)
+}
+
+export function applyRuleAdds(cfg: Record<string, unknown>, patch: RulePatch | undefined): void {
+  if (patch?.add === undefined) return
+  const rulesRaw = cfg['rules']
+  if (!isRecord(rulesRaw)) throw new Error('oxlintrc rules missing')
+  Object.assign(rulesRaw, patch.add)
+}
+
+async function applyArmExtras(ws: string, spec: ReturnType<typeof getArm>): Promise<void> {
+  if (spec.extraDeps.length === 0 && !spec.tsReset) return
+  const pkg = await readJson(join(ws, 'package.json'))
+  if (!isRecord(pkg)) throw new Error('package.json must be an object')
+  const deps = isRecord(pkg['devDependencies']) ? pkg['devDependencies'] : {}
+  const repoDeps = await repoDevDeps()
+  for (const name of spec.extraDeps) deps[name] = pinnedDep(repoDeps, name)
+  pkg['devDependencies'] = deps
+  await writeJson(join(ws, 'package.json'), pkg)
+  if (!spec.tsReset) return
+  await mkdir(join(ws, 'src'), { recursive: true })
+  await writeFile(join(ws, 'src/reset.d.ts'), "import '@total-typescript/ts-reset'\n")
+}
+
 export async function materializeArm(dest: string, arm: ArmId, kindId: string): Promise<void> {
+  const spec = getArm(arm)
   const kind = getKind(kindId)
   await mkdir(dest, { recursive: true })
   await cp(kind.templateDir, dest, { recursive: true })
-  if (arm === 'plain') return
+  if (!spec.overlay) return
   await kind.applyLintOverlay(dest)
-  if (arm === 'lint-cc') await applyComplexityOverlay(dest)
+  if (spec.complexity) await applyComplexityOverlay(dest)
+  const patch = kindPatch(spec, kindId)
+  if (patch !== undefined) {
+    const cfgPath = join(dest, '.oxlintrc.json')
+    const cfg = await readJson(cfgPath)
+    if (!isRecord(cfg)) throw new Error('.oxlintrc.json must be an object')
+    applyRulePatch(cfg, patch)
+    await writeJson(cfgPath, cfg)
+  }
+  await applyArmExtras(dest, spec)
 }

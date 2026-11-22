@@ -9,12 +9,103 @@ export const REPO_ROOT = dirname(EVALS_DIR)
 export const LEAK_RE =
   /\b(eval|test|judge|experiment|rubric|score|compar|benchmark|candidate|arena)/i
 
-export const ARM_IDS = ['plain', 'lint', 'lint-cc'] as const
-export type ArmId = (typeof ARM_IDS)[number]
 export type Group = 'core' | 'error' | 'functionality'
+
+export const TYPE_AWARE_UNSAFE_RULES: Record<string, unknown> = {
+  'typescript/no-unsafe-assignment': 'error',
+  'typescript/no-unsafe-return': 'error',
+  'typescript/no-unsafe-member-access': 'error',
+  'typescript/no-unsafe-call': 'error',
+  'typescript/no-unsafe-argument': 'error',
+  'typescript/no-misused-promises': 'error',
+}
+
+export type RulePatch = {
+  add?: Record<string, unknown>
+  drop?: readonly string[]
+}
+
+export type KindPatchKey = 'cli' | 'react'
+
+export const ARM_IDS = ['plain', 'lint', 'lint-cc', 'lint-v2'] as const
+export type ArmId = (typeof ARM_IDS)[number]
+
+export type ArmSpec = {
+  id: ArmId
+  overlay: boolean
+  complexity: boolean
+  tsReset: boolean
+  extraDeps: readonly string[]
+  cost: 'none' | 'overlay' | 'complexity'
+  patch: Partial<Record<KindPatchKey, RulePatch>>
+}
+
+export const ARMS: readonly ArmSpec[] = [
+  {
+    id: 'plain',
+    overlay: false,
+    complexity: false,
+    tsReset: false,
+    extraDeps: [],
+    cost: 'none',
+    patch: {},
+  },
+  {
+    id: 'lint',
+    overlay: true,
+    complexity: false,
+    tsReset: false,
+    extraDeps: [],
+    cost: 'overlay',
+    patch: {},
+  },
+  {
+    id: 'lint-cc',
+    overlay: true,
+    complexity: true,
+    tsReset: false,
+    extraDeps: [],
+    cost: 'complexity',
+    patch: {},
+  },
+  {
+    id: 'lint-v2',
+    overlay: true,
+    complexity: false,
+    tsReset: true,
+    extraDeps: ['@total-typescript/ts-reset'],
+    cost: 'overlay',
+    patch: {
+      cli: {
+        add: TYPE_AWARE_UNSAFE_RULES,
+        drop: ['no-console', 'typescript/no-non-null-assertion'],
+      },
+      react: {
+        add: { ...TYPE_AWARE_UNSAFE_RULES, 'ai/no-url-state-copy': 'error' },
+        drop: [
+          'ai/no-async-state',
+          'ai/no-boolean-state',
+          'ai/no-overzealous-destructuring',
+          'ai/no-use-state',
+        ],
+      },
+    },
+  },
+]
 
 export function isArmId(v: string): v is ArmId {
   return (ARM_IDS as readonly string[]).includes(v)
+}
+
+export function getArm(id: ArmId): ArmSpec {
+  const spec = ARMS.find(a => a.id === id)
+  if (spec === undefined) throw new Error(`unknown arm ${id}`)
+  return spec
+}
+
+export function kindPatch(spec: ArmSpec, kindId: string): RulePatch | undefined {
+  if (kindId === 'cli' || kindId === 'react') return spec.patch[kindId]
+  return undefined
 }
 
 export type Problem = {
@@ -359,12 +450,6 @@ export function findLeak(text: string): string | undefined {
   if (token === undefined) return undefined
   return token
 }
-
-export const ARMS: { id: ArmId; overlay: 'none' | 'lint' | 'lint-cc' }[] = [
-  { id: 'plain', overlay: 'none' },
-  { id: 'lint', overlay: 'lint' },
-  { id: 'lint-cc', overlay: 'lint-cc' },
-]
 
 export function parseManifest(raw: unknown): Manifest {
   if (!isRecord(raw) || !Array.isArray(raw['workspaces'])) throw new Error('manifest.json: missing workspaces')

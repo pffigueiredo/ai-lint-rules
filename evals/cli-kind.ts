@@ -262,7 +262,7 @@ function promptFor(checkpoint: number, spec: string): string {
 
 export const cliKind: Kind = {
   templateDir: join(EVALS_DIR, 'template'),
-  planted: ['AGENTS.md', 'package.json', 'tsconfig.json', '.gitignore', '.oxlintrc.json'],
+  planted: ['AGENTS.md', 'package.json', 'tsconfig.json', '.gitignore', '.oxlintrc.json', 'src/reset.d.ts'],
   promptFor,
   applyLintOverlay,
   prepareTools,

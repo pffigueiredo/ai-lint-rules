@@ -272,6 +272,7 @@ export const reactKind: Kind = {
     'src/main.tsx',
     'src/App.tsx',
     'src/vite-env.d.ts',
+    'src/reset.d.ts',
   ],
   promptFor,
   applyLintOverlay,

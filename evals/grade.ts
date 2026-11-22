@@ -9,6 +9,8 @@ import {
   type Kind,
   type Manifest,
   type Problem,
+  ARMS,
+  TYPE_AWARE_UNSAFE_RULES,
   parseManifest,
   EVALS_DIR,
   METRICS_PLUGIN,
@@ -64,6 +66,7 @@ const KNIP_IGNORE_DEPS = [
   '@testing-library/dom',
   'eslint-plugin-react-you-might-not-need-an-effect',
   'oxlint-plugin-complexity',
+  '@total-typescript/ts-reset',
   '@types/.+',
 ] as const
 
@@ -514,18 +517,21 @@ async function selfCheckProblem(problem: Problem): Promise<void> {
     await rm(sol, { recursive: true, force: true })
   }
 
-  const lintWs = await mkdtemp(join(tmpdir(), `${problem.slug}-lint-`))
-  try {
-    await materializeArm(lintWs, 'lint', problem.kind)
-    await copySolution(lintWs, problem.solutionDir)
-    await assertPlantedBlind(lintWs, kind)
-    await kind.prepareTools(lintWs)
-    const check = await capture('pnpm', ['check'], { cwd: lintWs, timeoutMs: 60_000 })
-    if (check.code !== 0) {
-      throw new Error(`${problem.slug} solution failed lint-arm pnpm check:\n${check.stdout}\n${check.stderr}`)
+  for (const spec of ARMS) {
+    if (!spec.overlay || spec.complexity) continue
+    const overlayWs = await mkdtemp(join(tmpdir(), `${problem.slug}-ov-`))
+    try {
+      await materializeArm(overlayWs, spec.id, problem.kind)
+      await copySolution(overlayWs, problem.solutionDir)
+      await assertPlantedBlind(overlayWs, kind)
+      await kind.prepareTools(overlayWs)
+      const check = await capture('pnpm', ['check'], { cwd: overlayWs, timeoutMs: 60_000 })
+      if (check.code !== 0) {
+        throw new Error(`${problem.slug} solution failed ${spec.id} pnpm check:\n${check.stdout}\n${check.stderr}`)
+      }
+    } finally {
+      await rm(overlayWs, { recursive: true, force: true })
     }
-  } finally {
-    await rm(lintWs, { recursive: true, force: true })
   }
 
   const empty = await mkdtemp(join(tmpdir(), `${problem.slug}-empty-`))
@@ -578,6 +584,63 @@ async function selfCheckMetrics(): Promise<void> {
     }
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+}
+
+async function selfCheckLintV2(): Promise<void> {
+  for (const kindId of ['cli', 'react'] as const) {
+    const dest = await mkdtemp(join(tmpdir(), `${kindId}-v2-`))
+    try {
+      if (dest.includes('lint-v2')) throw new Error('lint-v2 self-check: tmp path contains arm name')
+      await materializeArm(dest, 'lint-v2', kindId)
+      const kind = getKind(kindId)
+      await assertPlantedBlind(dest, kind)
+      for (const rel of kind.planted) {
+        let body: string
+        try {
+          body = await readFile(join(dest, rel), 'utf8')
+        } catch {
+          continue
+        }
+        if (rel.includes('lint-v2') || body.includes('lint-v2')) {
+          throw new Error(`${rel} contains the arm name`)
+        }
+      }
+      const cfg = await readJson(join(dest, '.oxlintrc.json'))
+      if (!isRecord(cfg) || !isRecord(cfg['rules'])) throw new Error('lint-v2 oxlintrc missing rules')
+      const rules = cfg['rules']
+      for (const id of Object.keys(TYPE_AWARE_UNSAFE_RULES)) {
+        if (rules[id] !== 'error') throw new Error(`lint-v2 missing ${id}`)
+      }
+      const reset = await readFile(join(dest, 'src/reset.d.ts'), 'utf8')
+      if (!reset.includes('@total-typescript/ts-reset')) throw new Error('lint-v2 missing src/reset.d.ts')
+      const pkg = await readJson(join(dest, 'package.json'))
+      if (!isRecord(pkg) || !isRecord(pkg['devDependencies'])) throw new Error('lint-v2 package.json')
+      if (typeof pkg['devDependencies']['@total-typescript/ts-reset'] !== 'string') {
+        throw new Error('lint-v2 missing ts-reset in workspace devDependencies')
+      }
+      if (kindId === 'cli') {
+        if (rules['no-console'] !== undefined) throw new Error('lint-v2 cli still has no-console')
+        if (rules['typescript/no-non-null-assertion'] !== undefined) {
+          throw new Error('lint-v2 cli still has no-non-null-assertion')
+        }
+      } else {
+        if (rules['ai/no-use-state'] !== undefined) throw new Error('lint-v2 react still has no-use-state')
+        if (rules['ai/no-async-state'] !== undefined) throw new Error('lint-v2 react still has no-async-state')
+        if (rules['ai/no-boolean-state'] !== undefined) throw new Error('lint-v2 react still has no-boolean-state')
+        if (rules['ai/no-overzealous-destructuring'] !== undefined) {
+          throw new Error('lint-v2 react still has no-overzealous-destructuring')
+        }
+        if (rules['ai/no-url-state-copy'] !== 'error') throw new Error('lint-v2 react missing no-url-state-copy')
+        if (rules['ai/no-use-effect'] !== 'error') throw new Error('lint-v2 react dropped no-use-effect')
+        if (rules['no-console'] !== 'error') throw new Error('lint-v2 react dropped no-console')
+        if (rules['typescript/no-non-null-assertion'] !== 'error') {
+          throw new Error('lint-v2 react dropped no-non-null-assertion')
+        }
+      }
+    } finally {
+      await rm(dest, { recursive: true, force: true })
+    }
   }
 }
 
@@ -683,12 +746,14 @@ async function selfCheck(): Promise<void> {
   await selfCheckKnip()
   process.stderr.write('self-check lint-cc overlay\n')
   await selfCheckLintCc()
+  process.stderr.write('self-check lint-v2 overlay\n')
+  await selfCheckLintV2()
   for (const slug of slugs) {
     const problem = await loadProblem(slug)
     process.stderr.write(`self-check ${slug} (${problem.specs.length} checkpoints)\n`)
     await selfCheckProblem(problem)
   }
-  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, lint-cc, pool\n`)
+  process.stdout.write(`self-check ok: ${slugs.join(', ')}, metrics-fixture, knip-fixture, lint-cc, lint-v2, pool\n`)
 }
 
 async function loadManifest(runDir: string): Promise<Manifest> {

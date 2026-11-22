@@ -84,8 +84,12 @@ export function selfCheckCompare(): void {
   if (otherArms(['plain', 'lint', 'lint-cc'], 'plain').join(',') !== 'lint,lint-cc') {
     throw new Error('otherArms')
   }
+  if (otherArms(['lint', 'lint-v2'], 'lint').join(',') !== 'lint-v2') throw new Error('otherArms lint-v2')
   if (armsPresent([{ arm: 'lint-cc' }, { arm: 'lint' }]).join(',') !== 'lint,lint-cc') {
     throw new Error('armsPresent stable order')
+  }
+  if (armsPresent([{ arm: 'lint-v2' }, { arm: 'lint' }]).join(',') !== 'lint,lint-v2') {
+    throw new Error('armsPresent lint-v2 after lint')
   }
   if (sectionTitle('Outcome', 'lint', true) !== 'Outcome') throw new Error('sectionTitle only')
   if (sectionTitle('Outcome', 'lint-cc', false) !== 'Outcome vs lint-cc') throw new Error('sectionTitle many')
