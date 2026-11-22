@@ -5,6 +5,7 @@ import { noBooleanState } from './no-boolean-state.js'
 import { noManualMemoization } from './no-manual-memoization.js'
 import { noOverzealousDestructuring } from './no-overzealous-destructuring.js'
 import { noStateCopies } from './no-state-copies.js'
+import { noUrlStateCopy } from './no-url-state-copy.js'
 import { noUseEffect } from './no-use-effect.js'
 import { noUseState } from './no-use-state.js'
 
@@ -17,6 +18,7 @@ const plugin = eslintCompatPlugin({
     'no-manual-memoization': noManualMemoization,
     'no-overzealous-destructuring': noOverzealousDestructuring,
     'no-state-copies': noStateCopies,
+    'no-url-state-copy': noUrlStateCopy,
     'no-use-effect': noUseEffect,
     'no-use-state': noUseState,
   },

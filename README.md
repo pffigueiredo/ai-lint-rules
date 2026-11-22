@@ -8,7 +8,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 
 ## Layout
 
-- `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: five hook bans and three state rules
+- `oxlint/react-bans` — nine Oxlint JS-plugin rules, with tests: five hook bans and four state rules
 - `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `!` assertions, `console`, floating promises
 - `tsconfig/strict.json` — the strict compiler flags that pair with those rules
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
@@ -45,13 +45,14 @@ Shareable UI state goes in the URL. Derived state comes from queries or mutation
 
 ## State rules
 
-For wherever `useState` is allowed: a project without `ai/no-use-state`, or the `src/lib/use-*` hooks that are exempt from it. They ban the three shapes unnecessary state usually takes. A lint rule can't judge what state means, only how it's written, so each rule targets one shape that is almost always the wrong version.
+For wherever `useState` is allowed: a project without `ai/no-use-state`, or the `src/lib/use-*` hooks that are exempt from it. They ban the four shapes unnecessary state usually takes. A lint rule can't judge what state means, only how it's written, so each rule targets one shape that is almost always the wrong version.
 
 | Rule | Blocks | Fix |
 | --- | --- | --- |
 | `ai/no-async-state` | A state setter called in an `async` function, in `.then` / `.catch` / `.finally`, or in a query's `onSuccess` / `onError` / `onSettled` | Read `status`, `data` and `error` from `useQuery` / `useMutation`. `status` is already `'idle' \| 'pending' \| 'success' \| 'error'`. |
 | `ai/no-boolean-state` | Any boolean in `useState`: `false`, `!x`, `Boolean(x)`, `x > 0`, `<boolean>`, and boolean fields of an object (`useState({ editing: false })`) | Let the browser own open/closed (`<details>`, `popover`, `<dialog>`), the form own checkboxes (read `FormData` on submit), and TanStack Query own async status. Name anything else as a union: `useState<'view' \| 'editing'>('view')`. |
 | `ai/no-state-copies` | `useState(props.venue)`, and `setSelected(v)` where `v` is an item from `.map` / `.find` / `.forEach` | Read the prop directly, or name it `initial…` / `default…` if it's a starting draft. Store the item's key and look it up during render. |
+| `ai/no-url-state-copy` | `useState` / `useReducer` whose initializer (or a same-file function passed or called as that initializer, one level deep) reads `location`, `window.location`, `document.location`, `URLSearchParams`, `useSearchParams`, or `useSearch` | Read the value from the URL during render, or from a `src/lib/use-*` hook that subscribes to it. Copying it into state goes stale on Back. |
 
 Whether two booleans depend on each other isn't visible in syntax or in types, so no rule can detect it without guessing. `no-boolean-state` doesn't try. It removes boolean flags from component state, so contradictory flags can't exist. It doesn't catch two related unions (`'view' | 'editing'` next to `'idle' | 'confirming'`); that's left to review. Only `ai/no-use-state` rules out every combination, by allowing no local state.
 
