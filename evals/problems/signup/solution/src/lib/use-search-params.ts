@@ -1,23 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
 
-function read(): URLSearchParams {
-  return new URLSearchParams(window.location.search)
+const SEARCH_CHANGE = 'searchchange'
+
+function subscribe(onChange: () => void): () => void {
+  window.addEventListener('popstate', onChange)
+  window.addEventListener(SEARCH_CHANGE, onChange)
+  return () => {
+    window.removeEventListener('popstate', onChange)
+    window.removeEventListener(SEARCH_CHANGE, onChange)
+  }
+}
+
+function getSnapshot(): string {
+  return window.location.search
+}
+
+function getServerSnapshot(): string {
+  return ''
 }
 
 export function useSearchParams(): [URLSearchParams, (next: URLSearchParams) => void] {
-  const [params, setParams] = useState(read)
-  useEffect(() => {
-    const onPop = () => setParams(read())
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [])
+  const search = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
   function replace(next: URLSearchParams): void {
     const qs = next.toString()
     const url = qs === '' ? window.location.pathname : `${window.location.pathname}?${qs}`
     window.history.replaceState({}, '', url)
-    setParams(new URLSearchParams(next))
+    window.dispatchEvent(new Event(SEARCH_CHANGE))
   }
-  return [params, replace]
+  return [new URLSearchParams(search), replace]
 }
 
 export function writeParam(params: URLSearchParams, key: string, value: string | null): URLSearchParams {
