@@ -8,7 +8,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 
 ## Layout
 
-- `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: four hook bans and four state rules
+- `oxlint/react-bans` — nine Oxlint JS-plugin rules, with tests: four hook bans, one URL rule, and four state rules
 - `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `!` assertions, `console`, floating promises
 - `tsconfig/strict.json` — the strict compiler flags that pair with those rules
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
@@ -39,8 +39,9 @@ Oxlint loads JavaScript plugins through `jsPlugins`. Drop `oxlint/react-bans` in
 | `ai/no-use-effect` | `useEffect`, `useLayoutEffect` |
 | `ai/no-manual-memoization` | `useMemo`, `useCallback` (React Compiler owns this) |
 | `ai/no-banned-react-reexport` | Re-exporting the banned hooks through a local barrel |
+| `ai/url-state-in-lib` | `window.location`, `document.location`, `globalThis.location`, the unshadowed global `location`, and `history.pushState` / `replaceState` / `back` / `forward` / `go` (bare `history` and `window.history`) outside `src/lib/**`. Does not flag `URL` or `URLSearchParams`. |
 
-Shareable UI state goes in the URL. Derived state comes from queries or mutations. Effects and subscriptions live behind audited `src/lib/use-*.ts` hooks. The example config turns the state and effect rules off for that glob.
+Shareable UI state goes in the URL. Derived state comes from queries or mutations. Effects and subscriptions live behind audited `src/lib/use-*.ts` hooks. The example config turns the state and effect rules off for `src/lib/use-*`, and `ai/url-state-in-lib` off for `src/lib/**`. Call a `src/lib/use-*` hook that reads with `useSyncExternalStore` and subscribes to `popstate`.
 
 ## State rules
 

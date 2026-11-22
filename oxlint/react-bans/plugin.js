@@ -7,6 +7,7 @@ import { noStateCopies } from './no-state-copies.js'
 import { noUrlStateCopy } from './no-url-state-copy.js'
 import { noUseEffect } from './no-use-effect.js'
 import { noUseState } from './no-use-state.js'
+import { urlStateInLib } from './url-state-in-lib.js'
 
 const plugin = eslintCompatPlugin({
   meta: { name: 'ai' },
@@ -19,6 +20,7 @@ const plugin = eslintCompatPlugin({
     'no-url-state-copy': noUrlStateCopy,
     'no-use-effect': noUseEffect,
     'no-use-state': noUseState,
+    'url-state-in-lib': urlStateInLib,
   },
 })
 
