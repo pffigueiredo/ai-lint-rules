@@ -628,9 +628,6 @@ async function selfCheckLintV2(): Promise<void> {
         if (rules['ai/no-use-state'] !== undefined) throw new Error('lint-v2 react still has no-use-state')
         if (rules['ai/no-async-state'] !== undefined) throw new Error('lint-v2 react still has no-async-state')
         if (rules['ai/no-boolean-state'] !== undefined) throw new Error('lint-v2 react still has no-boolean-state')
-        if (rules['ai/no-overzealous-destructuring'] !== undefined) {
-          throw new Error('lint-v2 react still has no-overzealous-destructuring')
-        }
         if (rules['ai/no-url-state-copy'] !== 'error') throw new Error('lint-v2 react missing no-url-state-copy')
         if (rules['ai/no-use-effect'] !== 'error') throw new Error('lint-v2 react dropped no-use-effect')
         if (rules['no-console'] !== 'error') throw new Error('lint-v2 react dropped no-console')

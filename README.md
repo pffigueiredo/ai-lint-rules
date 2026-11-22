@@ -8,7 +8,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 
 ## Layout
 
-- `oxlint/react-bans` — nine Oxlint JS-plugin rules, with tests: five hook bans and four state rules
+- `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: four hook bans and four state rules
 - `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `!` assertions, `console`, floating promises
 - `tsconfig/strict.json` — the strict compiler flags that pair with those rules
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
@@ -39,7 +39,6 @@ Oxlint loads JavaScript plugins through `jsPlugins`. Drop `oxlint/react-bans` in
 | `ai/no-use-effect` | `useEffect`, `useLayoutEffect` |
 | `ai/no-manual-memoization` | `useMemo`, `useCallback` (React Compiler owns this) |
 | `ai/no-banned-react-reexport` | Re-exporting the banned hooks through a local barrel |
-| `ai/no-overzealous-destructuring` | Destructuring a field used fewer than three times |
 
 Shareable UI state goes in the URL. Derived state comes from queries or mutations. Effects and subscriptions live behind audited `src/lib/use-*.ts` hooks. The example config turns the state and effect rules off for that glob.
 
@@ -189,7 +188,7 @@ The restrict patterns in `oxlint/tailwind-theme/oxlintrc.example.json` assume na
 
 ## Evals
 
-`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints in one or more arms. `plain` is the template with no overlay. `lint` plants this repo's overlay. `lint-cc` is exactly that overlay plus `eslint/complexity` max 20 and `oxlint-plugin-complexity` cognitive complexity max 15. `lint-v2` is the overlay plus type-aware `no-unsafe-*` and `no-misused-promises`, a planted `src/reset.d.ts` that imports `@total-typescript/ts-reset`, CLI drops of `no-console` and `no-non-null-assertion`, and React drops of `no-async-state`, `no-boolean-state`, `no-overzealous-destructuring`, and `no-use-state`, replaced by `ai/no-url-state-copy`. Those deltas live on the arms table in `evals/lib.ts`. The agent sees them as extra or fewer rules in `.oxlintrc.json`. The arm name never appears in a workspace path or planted file. Function caps do not cover module-level code. The grader's `(module)` pseudo-function measures whether an agent moved logic to module scope to dodge the cap.
+`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints in one or more arms. `plain` is the template with no overlay. `lint` plants this repo's overlay. `lint-cc` is exactly that overlay plus `eslint/complexity` max 20 and `oxlint-plugin-complexity` cognitive complexity max 15. `lint-v2` is the overlay plus type-aware `no-unsafe-*` and `no-misused-promises`, a planted `src/reset.d.ts` that imports `@total-typescript/ts-reset`, CLI drops of `no-console` and `no-non-null-assertion`, and React drops of `no-async-state`, `no-boolean-state`, and `no-use-state`, replaced by `ai/no-url-state-copy`. Those deltas live on the arms table in `evals/lib.ts`. The agent sees them as extra or fewer rules in `.oxlintrc.json`. The arm name never appears in a workspace path or planted file. Function caps do not cover module-level code. The grader's `(module)` pseudo-function measures whether an agent moved logic to module scope to dodge the cap.
 
 CLI problems (`ledger`, `tasks`) start from `evals/template`. The lint overlay is `oxlint/typescript` plus `tsconfig/strict.json`. Hidden checks run `src/cli.ts` against JSON cases.
 

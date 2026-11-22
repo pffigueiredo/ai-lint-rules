@@ -82,12 +82,7 @@ export const ARMS: readonly ArmSpec[] = [
       },
       react: {
         add: { ...TYPE_AWARE_UNSAFE_RULES, 'ai/no-url-state-copy': 'error' },
-        drop: [
-          'ai/no-async-state',
-          'ai/no-boolean-state',
-          'ai/no-overzealous-destructuring',
-          'ai/no-use-state',
-        ],
+        drop: ['ai/no-async-state', 'ai/no-boolean-state', 'ai/no-use-state'],
       },
     },
   },

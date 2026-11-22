@@ -1284,9 +1284,6 @@ export async function selfCheckReview(): Promise<void> {
   if (v2ReactIds.has('ai(no-use-state)')) throw new Error('lint-v2 react still has no-use-state')
   if (v2ReactIds.has('ai(no-async-state)')) throw new Error('lint-v2 react still has no-async-state')
   if (v2ReactIds.has('ai(no-boolean-state)')) throw new Error('lint-v2 react still has no-boolean-state')
-  if (v2ReactIds.has('ai(no-overzealous-destructuring)')) {
-    throw new Error('lint-v2 react still has no-overzealous-destructuring')
-  }
   const urlCopy = v2React.find(r => r.rule === 'ai(no-url-state-copy)')
   if (urlCopy === undefined || !urlCopy.message.includes('URL')) {
     throw new Error('lint-v2 react missing no-url-state-copy message')

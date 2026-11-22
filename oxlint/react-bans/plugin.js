@@ -3,7 +3,6 @@ import { noAsyncState } from './no-async-state.js'
 import { noBannedReactReexport } from './no-banned-react-reexport.js'
 import { noBooleanState } from './no-boolean-state.js'
 import { noManualMemoization } from './no-manual-memoization.js'
-import { noOverzealousDestructuring } from './no-overzealous-destructuring.js'
 import { noStateCopies } from './no-state-copies.js'
 import { noUrlStateCopy } from './no-url-state-copy.js'
 import { noUseEffect } from './no-use-effect.js'
@@ -16,7 +15,6 @@ const plugin = eslintCompatPlugin({
     'no-banned-react-reexport': noBannedReactReexport,
     'no-boolean-state': noBooleanState,
     'no-manual-memoization': noManualMemoization,
-    'no-overzealous-destructuring': noOverzealousDestructuring,
     'no-state-copies': noStateCopies,
     'no-url-state-copy': noUrlStateCopy,
     'no-use-effect': noUseEffect,
