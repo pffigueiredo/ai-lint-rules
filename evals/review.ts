@@ -11,14 +11,18 @@ import {
   METRICS_PLUGIN,
   REPO_ROOT,
   capture,
+  getArm,
+  isArmId,
   isRecord,
+  kindPatch,
   listCheckpointTags,
   parseManifest,
   readJson,
   spawnCursorAgent,
   writeJson,
 } from './lib.ts'
-import { getKind, loadProblem } from './kinds.ts'
+import { uniqueArms } from './compare.ts'
+import { applyRuleAdds, applyRulePatch, getKind, loadProblem } from './kinds.ts'
 
 const OXLINT = join(REPO_ROOT, 'node_modules/.bin/oxlint')
 const REVIEW_TIMEOUT_MS = 12 * 60_000
@@ -40,7 +44,7 @@ export type BenefitRow = {
   kind: 'benefit'
   id: string
   problem: string
-  arm: 'plain'
+  arm: ArmId
   rep: number
   checkpoint: number
   rule: string
@@ -364,7 +368,7 @@ function parseBenefitRow(raw: unknown): BenefitRow {
   if (typeof id !== 'string' || typeof problem !== 'string' || typeof rule !== 'string' || typeof message !== 'string') {
     throw new Error('review.jsonl benefit row missing strings')
   }
-  if (arm !== 'plain') throw new Error('review.jsonl benefit row: arm must be plain')
+  if (typeof arm !== 'string' || !isArmId(arm)) throw new Error('review.jsonl benefit row: bad arm')
   if (typeof rep !== 'number' || typeof checkpoint !== 'number' || typeof start !== 'number' || typeof end !== 'number') {
     throw new Error('review.jsonl benefit row missing numbers')
   }
@@ -408,7 +412,9 @@ function parseCostRow(raw: unknown): CostRow {
   if (!isRecord(raw) || raw['kind'] !== 'cost') throw new Error('review.jsonl: expected cost row')
   const { id, problem, arm, rep, checkpoint, findings } = raw
   if (typeof id !== 'string' || typeof problem !== 'string') throw new Error('review.jsonl cost row missing strings')
-  if (arm !== 'lint' && arm !== 'lint-cc') throw new Error('review.jsonl cost row: arm must be an overlay arm')
+  if (typeof arm !== 'string' || !isArmId(arm) || arm === 'plain') {
+    throw new Error('review.jsonl cost row: arm must be an overlay arm')
+  }
   if (typeof rep !== 'number' || typeof checkpoint !== 'number') throw new Error('review.jsonl cost row missing numbers')
   if (!Array.isArray(findings)) throw new Error('review.jsonl cost row missing findings')
   return {
@@ -426,7 +432,7 @@ function parseCostRow(raw: unknown): CostRow {
   }
 }
 
-function parseReviewRow(raw: unknown): ReviewRow {
+export function parseReviewRow(raw: unknown): ReviewRow {
   if (!isRecord(raw)) throw new Error('review.jsonl row must be an object')
   if (raw['kind'] === 'benefit') return parseBenefitRow(raw)
   if (raw['kind'] === 'cost') return parseCostRow(raw)
@@ -540,14 +546,17 @@ async function reactBanMessages(): Promise<Map<string, string[]>> {
   return out
 }
 
-export async function overlayRules(kindId: string): Promise<OverlayRule[]> {
+async function overlayExample(kindId: string): Promise<Record<string, unknown>> {
   const examplePath =
     kindId === 'react'
       ? join(REPO_ROOT, 'oxlint/stack/oxlintrc.example.json')
       : join(REPO_ROOT, 'oxlint/typescript/oxlintrc.example.json')
   const cfg = await readJson(examplePath)
   if (!isRecord(cfg)) throw new Error(`${examplePath} must be an object`)
-  const rules = overlayFromConfig(cfg)
+  return cfg
+}
+
+async function withPluginMessages(kindId: string, rules: OverlayRule[]): Promise<OverlayRule[]> {
   if (kindId !== 'react') return rules
   const plugin = await reactBanMessages()
   return rules.map(r => {
@@ -556,6 +565,50 @@ export async function overlayRules(kindId: string): Promise<OverlayRule[]> {
     const message = [r.message, ...extra].filter(m => m !== '').join(' ')
     return { rule: r.rule, message }
   })
+}
+
+export async function overlayRules(kindId: string): Promise<OverlayRule[]> {
+  return withPluginMessages(kindId, overlayFromConfig(await overlayExample(kindId)))
+}
+
+export async function overlayRulesPatched(kindId: string, arm: ArmId): Promise<OverlayRule[]> {
+  const cfg = await overlayExample(kindId)
+  applyRulePatch(cfg, kindPatch(getArm(arm), kindId))
+  return withPluginMessages(kindId, overlayFromConfig(cfg))
+}
+
+export async function overlayRulesForArm(kindId: string, arm: ArmId): Promise<OverlayRule[]> {
+  const spec = getArm(arm)
+  if (spec.cost === 'none') return []
+  if (spec.cost === 'complexity') return COMPLEXITY_COST_RULES
+  return overlayRulesPatched(kindId, arm)
+}
+
+async function unionYardstick(kind: Kind, kindId: string, present: readonly ArmId[]): Promise<Record<string, unknown>> {
+  const cfg = await kind.yardstickOxlint()
+  for (const arm of present) applyRuleAdds(cfg, kindPatch(getArm(arm), kindId))
+  return cfg
+}
+
+async function unionRuleIds(kindId: string, present: readonly ArmId[]): Promise<Set<string>> {
+  const ids = new Set((await overlayRules(kindId)).map(r => r.rule))
+  for (const arm of present) {
+    const patch = kindPatch(getArm(arm), kindId)
+    if (patch?.add === undefined) continue
+    for (const id of Object.keys(patch.add)) ids.add(normalizeRule(id))
+  }
+  return ids
+}
+
+async function enforcedRuleIds(kindId: string, arm: ArmId): Promise<Set<string>> {
+  const spec = getArm(arm)
+  if (!spec.overlay) return new Set()
+  const ids = new Set((await overlayRulesPatched(kindId, arm)).map(r => r.rule))
+  if (spec.complexity) {
+    ids.add('eslint(complexity)')
+    ids.add('complexity(complexity)')
+  }
+  return ids
 }
 
 function formatOverlay(rules: OverlayRule[]): string {
@@ -700,7 +753,7 @@ function withoutContent(files: SrcFile[]): SrcFile[] {
 }
 
 export function assertBlind(text: string, label: string): void {
-  if (/\b(plain|lint-arm|lint arm|lint-cc)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
+  if (/\b(plain|lint-arm|lint arm|lint-cc|lint-v2)\b/i.test(text)) throw new Error(`${label} leaks an arm name`)
   if (/grok/i.test(text)) throw new Error(`${label} leaks grok`)
   if (/\b(cursor-grok|gpt-5|claude-|gemini-)/i.test(text)) throw new Error(`${label} leaks a model id`)
 }
@@ -710,6 +763,7 @@ async function collectSnapshot(
   ws: WorkspaceRow,
   requested: number | undefined,
   needHits: boolean,
+  present: readonly ArmId[],
 ): Promise<{ checkpoint: number; specs: string[]; files: SrcFile[]; hits: LintHit[]; kindId: string } | undefined> {
   const problem = await loadProblem(ws.problem)
   const kind = getKind(problem.kind)
@@ -727,7 +781,7 @@ async function collectSnapshot(
       return { checkpoint, specs, files, hits: [], kindId: problem.kind }
     }
     const fileMap = new Map(files.map(f => [f.path, f.content]))
-    const cfg = await kind.yardstickOxlint()
+    const cfg = await unionYardstick(kind, problem.kind, present)
     const cfgPath = join(clone, '.metrics-oxlintrc.json')
     await writeJson(cfgPath, cfg)
     const ran = await capture(OXLINT, ['--format', 'json', '-c', cfgPath, join(clone, 'src')], {
@@ -773,22 +827,46 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
   const existing = await readJsonl(join(opts.runDir, 'review.jsonl'), parseReviewRow)
   const doneBenefit = new Set(existing.filter((r): r is BenefitRow => r.kind === 'benefit').map(benefitKey))
   const doneCost = new Set(existing.filter((r): r is CostRow => r.kind === 'cost').map(costKey))
-  const rulesCache = new Map<string, OverlayRule[]>()
-  const overlayFor = async (kindId: string): Promise<OverlayRule[]> => {
-    const cached = rulesCache.get(kindId)
+  const present = uniqueArms(manifest.workspaces)
+  const unionCache = new Map<string, Set<string>>()
+  const enforcedCache = new Map<string, Set<string>>()
+  const patchedCache = new Map<string, OverlayRule[]>()
+  const unionFor = async (kindId: string): Promise<Set<string>> => {
+    const cached = unionCache.get(kindId)
     if (cached !== undefined) return cached
-    const rules = await overlayRules(kindId)
-    rulesCache.set(kindId, rules)
+    const ids = await unionRuleIds(kindId, present)
+    unionCache.set(kindId, ids)
+    return ids
+  }
+  const enforcedFor = async (kindId: string, arm: ArmId): Promise<Set<string>> => {
+    const key = `${kindId}\t${arm}`
+    const cached = enforcedCache.get(key)
+    if (cached !== undefined) return cached
+    const ids = await enforcedRuleIds(kindId, arm)
+    enforcedCache.set(key, ids)
+    return ids
+  }
+  const patchedFor = async (kindId: string, arm: ArmId): Promise<OverlayRule[]> => {
+    const key = `${kindId}\t${arm}`
+    const cached = patchedCache.get(key)
+    if (cached !== undefined) return cached
+    const rules = await overlayRulesForArm(kindId, arm)
+    patchedCache.set(key, rules)
     return rules
   }
   const jobs: Job[] = []
   for (const ws of manifest.workspaces) {
     process.stderr.write(`review collect ${ws.id}\n`)
-    const snap = await collectSnapshot(opts.runDir, ws, opts.checkpoint, ws.arm === 'plain')
+    const problem = await loadProblem(ws.problem)
+    const union = await unionFor(problem.kind)
+    const enforced = await enforcedFor(problem.kind, ws.arm)
+    const needHits = [...union].some(id => !enforced.has(id))
+    const snap = await collectSnapshot(opts.runDir, ws, opts.checkpoint, needHits, present)
     if (snap === undefined) continue
-    if (ws.arm === 'plain') {
+    if (needHits) {
       const fileMap = new Map(snap.files.map(f => [f.path, f.content]))
       for (const hit of snap.hits) {
+        if (enforced.has(normalizeRule(hit.rule))) continue
         const src = fileMap.get(hit.file)
         if (src === undefined) continue
         const key = benefitKey({
@@ -802,17 +880,18 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
         if (doneBenefit.has(key)) continue
         jobs.push({ kind: 'benefit', ws, checkpoint: snap.checkpoint, hit, files: snap.files, specs: snap.specs, src })
       }
-      continue
     }
+    const spec = getArm(ws.arm)
+    if (spec.cost === 'none') continue
     if (doneCost.has(costKey({ id: ws.id, checkpoint: snap.checkpoint }))) continue
-    const costKind = ws.arm === 'lint-cc' ? 'complexity' : 'overlay'
+    const costKind = spec.cost === 'complexity' ? 'complexity' : 'overlay'
     jobs.push({
       kind: 'cost',
       ws,
       checkpoint: snap.checkpoint,
       files: snap.files,
       specs: snap.specs,
-      rules: costKind === 'complexity' ? COMPLEXITY_COST_RULES : await overlayFor(snap.kindId),
+      rules: await patchedFor(snap.kindId, ws.arm),
       costKind,
     })
   }
@@ -828,7 +907,7 @@ export async function runReview(opts: ReviewOpts): Promise<void> {
         kind: 'benefit',
         id: job.ws.id,
         problem: job.ws.problem,
-        arm: 'plain',
+        arm: job.ws.arm,
         rep: job.ws.rep,
         checkpoint: job.checkpoint,
         rule: job.hit.rule,
@@ -990,20 +1069,29 @@ export function reviewMarkdown(
           : `Checkpoints ${checkpoints.join(', ')}.`
   const by = bucketsByRule(rows)
   const rules = [...by.keys()].sort()
-  const benefitN = rows.filter(r => r.kind === 'benefit').length
+  const benefitRows = rows.filter((r): r is BenefitRow => r.kind === 'benefit')
+  const benefitN = benefitRows.length
   const costRows = rows.filter((r): r is CostRow => r.kind === 'cost')
   const costN = costRows.length
+  const benefitArms = [...new Set(benefitRows.map(r => r.arm))]
   const costArms = [...new Set(costRows.map(r => r.arm))]
+  const classic =
+    benefitArms.every(a => a === 'plain') &&
+    (costArms.length === 0 || (costArms.length === 1 && costArms[0] === 'lint'))
   const costLabel =
     costArms.length === 1 && costArms[0] === 'lint'
       ? `${costN} lint-arm snapshots.`
       : `${costN} overlay snapshots.`
+  const hitsLabel = classic ? `${benefitN} plain-arm lint hits` : `${benefitN} lint hits in arms that do not enforce the rule`
+  const hitCol = classic ? 'plain hits' : 'hits'
+  const benefitHead = classic ? 'Plain' : 'Hits'
+  const costHead = classic ? 'Lint-arm' : 'Workarounds'
   const lines: string[] = [
     '# Rule review',
     '',
     checkpointLabel,
     `Reviewer model \`${meta.model}\`.`,
-    `${benefitN} plain-arm lint hits, ${costLabel}`,
+    `${hitsLabel}, ${costLabel}`,
     '',
     '## Net verdict',
     '',
@@ -1029,11 +1117,11 @@ export function reviewMarkdown(
     lines.push(
       `## \`${rule}\``,
       '',
-      '| plain hits | % bug | % fragile | % style | % noise | workarounds | % better | % same | % worse | % bug | net |',
+      `| ${hitCol} | % bug | % fragile | % style | % noise | workarounds | % better | % same | % worse | % bug | net |`,
       '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
       `| ${plain} | ${pct(b.bug, plain)} | ${pct(b.fragile, plain)} | ${pct(b.style, plain)} | ${pct(b.noise, plain)} | ${work} | ${pct(c.better, work)} | ${pct(c.same, work)} | ${pct(c.worse, work)} | ${pct(c.bug, work)} | ${net} |`,
       '',
-      'Plain',
+      benefitHead,
       '',
     )
     const bEx = pickExamples(bucket.benefit, BENEFIT_VERDICTS, 3)
@@ -1044,7 +1132,7 @@ export function reviewMarkdown(
       }
       lines.push('')
     }
-    lines.push('Lint-arm', '')
+    lines.push(costHead, '')
     const cEx = pickExamples(bucket.cost, COST_VERDICTS, 3)
     if (cEx.length === 0) lines.push('None.', '')
     else {
@@ -1177,6 +1265,43 @@ export async function selfCheckReview(): Promise<void> {
     throw new Error('overlayRules react should drop tailwind')
   }
 
+  const lintCliPatched = await overlayRulesPatched('cli', 'lint')
+  if (cliRules.map(r => r.rule).join() !== lintCliPatched.map(r => r.rule).join()) {
+    throw new Error('overlayRulesPatched lint should match overlayRules')
+  }
+  const v2Cli = await overlayRulesPatched('cli', 'lint-v2')
+  const v2CliIds = new Set(v2Cli.map(r => r.rule))
+  if (v2CliIds.has('eslint(no-console)')) throw new Error('lint-v2 cli still has no-console')
+  if (v2CliIds.has('typescript(no-non-null-assertion)')) throw new Error('lint-v2 cli still has no-non-null-assertion')
+  if (!v2CliIds.has('typescript(no-unsafe-assignment)')) throw new Error('lint-v2 cli missing no-unsafe-assignment')
+  if (!v2CliIds.has('typescript(no-misused-promises)')) throw new Error('lint-v2 cli missing no-misused-promises')
+  const v2React = await overlayRulesPatched('react', 'lint-v2')
+  const v2ReactIds = new Set(v2React.map(r => r.rule))
+  if (v2ReactIds.has('ai(no-use-state)')) throw new Error('lint-v2 react still has no-use-state')
+  if (v2ReactIds.has('ai(no-async-state)')) throw new Error('lint-v2 react still has no-async-state')
+  if (v2ReactIds.has('ai(no-boolean-state)')) throw new Error('lint-v2 react still has no-boolean-state')
+  if (v2ReactIds.has('ai(no-overzealous-destructuring)')) {
+    throw new Error('lint-v2 react still has no-overzealous-destructuring')
+  }
+  const urlCopy = v2React.find(r => r.rule === 'ai(no-url-state-copy)')
+  if (urlCopy === undefined || !urlCopy.message.includes('URL')) {
+    throw new Error('lint-v2 react missing no-url-state-copy message')
+  }
+  if (!v2ReactIds.has('ai(no-use-effect)')) throw new Error('lint-v2 react dropped no-use-effect')
+  if ((await overlayRulesForArm('cli', 'plain')).length !== 0) throw new Error('plain has no overlay rules')
+  const ccCost = await overlayRulesForArm('cli', 'lint-cc')
+  if (ccCost[0]?.rule !== 'eslint(complexity)') throw new Error('lint-cc cost rules should be complexity')
+
+  let leakThrew = false
+  try {
+    assertBlind('compared with lint-v2', 'v2 leak')
+  } catch {
+    leakThrew = true
+  }
+  if (!leakThrew) throw new Error('assertBlind should reject lint-v2')
+  const v2Prompt = costPrompt(['Print a total.'], srcFiles, v2Cli)
+  assertBlind(v2Prompt, 'lint-v2 cost prompt')
+
   const cPrompt = costPrompt(['Print a total.'], srcFiles, cliRules)
   assertBlind(cPrompt, 'cost self-check prompt')
   if (!cPrompt.includes('eslint(no-console)')) throw new Error('cost prompt missing overlay rules')
@@ -1227,7 +1352,39 @@ export async function selfCheckReview(): Promise<void> {
   )
   if (!md.includes('costs more than it catches')) throw new Error('review.md net verdict missing')
   if (!md.includes('Checkpoint 3.')) throw new Error('review.md checkpoint')
+  if (!md.includes('1 plain-arm lint hits, 0 overlay snapshots.')) throw new Error('review.md plain-vs-lint intro')
+  if (!md.includes('| plain hits |')) throw new Error('review.md plain hits column')
+  if (!md.includes('\nPlain\n')) throw new Error('review.md Plain heading')
+  if (!md.includes('\nLint-arm\n')) throw new Error('review.md Lint-arm heading')
   if (/grok/i.test(md)) throw new Error('review.md leaked grok')
+
+  const nArmMd = reviewMarkdown(
+    [
+      {
+        kind: 'benefit',
+        id: 'ledger-lint-v2-r1',
+        problem: 'ledger',
+        arm: 'lint-v2',
+        rep: 1,
+        checkpoint: 3,
+        rule: 'eslint(no-console)',
+        message: 'Unexpected console statement.',
+        file: 'src/cli.ts',
+        start: 2,
+        end: 2,
+        excerpt: 'console.log(x)',
+        verdict: 'noise',
+        why: 'CLI output.',
+        input: null,
+      },
+    ],
+    { checkpoint: 3, model: 'gpt-5.6-sol-high' },
+  )
+  if (nArmMd.includes('plain-arm lint hits')) throw new Error('n-arm review should not say plain-arm')
+  if (!nArmMd.includes('arms that do not enforce')) throw new Error('n-arm review intro')
+  if (!nArmMd.includes('| hits | % bug |')) throw new Error('n-arm hits column')
+  if (!nArmMd.includes('\nHits\n')) throw new Error('n-arm Hits heading')
+  if (!nArmMd.includes('\nWorkarounds\n')) throw new Error('n-arm Workarounds heading')
 
   const dir = await mkdtemp(join(tmpdir(), 'rev-fresh-'))
   try {
