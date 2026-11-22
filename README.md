@@ -189,7 +189,7 @@ The restrict patterns in `oxlint/tailwind-theme/oxlintrc.example.json` assume na
 
 ## Evals
 
-`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints in one or more arms. `plain` is the template with no overlay. `lint` plants this repo's overlay. `lint-cc` is exactly that overlay plus `eslint/complexity` max 20 and `oxlint-plugin-complexity` cognitive complexity max 15. The agent sees those as extra rules in `.oxlintrc.json`. The arm name never appears in a workspace path or planted file. Function caps do not cover module-level code. The grader's `(module)` pseudo-function measures whether an agent moved logic to module scope to dodge the cap.
+`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints in one or more arms. `plain` is the template with no overlay. `lint` plants this repo's overlay. `lint-cc` is exactly that overlay plus `eslint/complexity` max 20 and `oxlint-plugin-complexity` cognitive complexity max 15. `lint-v2` is the overlay plus type-aware `no-unsafe-*` and `no-misused-promises`, a planted `src/reset.d.ts` that imports `@total-typescript/ts-reset`, CLI drops of `no-console` and `no-non-null-assertion`, and React drops of `no-async-state`, `no-boolean-state`, `no-overzealous-destructuring`, and `no-use-state`, replaced by `ai/no-url-state-copy`. Those deltas live on the arms table in `evals/lib.ts`. The agent sees them as extra or fewer rules in `.oxlintrc.json`. The arm name never appears in a workspace path or planted file. Function caps do not cover module-level code. The grader's `(module)` pseudo-function measures whether an agent moved logic to module scope to dodge the cap.
 
 CLI problems (`ledger`, `tasks`) start from `evals/template`. The lint overlay is `oxlint/typescript` plus `tsconfig/strict.json`. Hidden checks run `src/cli.ts` against JSON cases.
 
@@ -238,13 +238,13 @@ node evals/judge.ts --review evals/runs/<timestamp>
 
 That reuses the judge model (default `gpt-5.6-sol-high`, never grok), blinding, resume, and `--concurrency`. Pass `--checkpoint N` to review that checkpoint instead of the final one. `--fresh` archives `review.jsonl` and `review.md`.
 
-On the plain arm, the reviewer sees every yardstick oxlint error (the same config `grade.ts` uses, minus the metrics plugin and `eslint/complexity`), about 20 lines of context, the whole file, the rule, and the specs. Verdicts are `bug`, `fragile`, `style`, or `noise`. A `bug` must name an input a person can run.
+The yardstick is the union of every arm's rules. A rule's benefit side reviews its hits in arms that do not enforce it. Its cost side reviews workarounds in arms that do. On a plain-vs-lint run that is the old split: every yardstick hit on plain, workarounds on lint. Dropped lint-v2 rules are reviewed as hits in lint-v2 code. Added lint-v2 rules are reviewed as workarounds in lint-v2 code and as hits in lint code.
 
-On the lint arm, the reviewer sees the overlay rules and their messages from the repo configs and `oxlint/react-bans`, not the arm name. They mark workarounds `better`, `same`, `worse`, or `bug`.
+The reviewer sees about 20 lines of context, the whole file, the rule, and the specs. Benefit verdicts are `bug`, `fragile`, `style`, or `noise`. A `bug` must name an input a person can run. Cost verdicts are `better`, `same`, `worse`, or `bug`. Prompts list overlay rules and their messages from the repo configs and `oxlint/react-bans`, not the arm name.
 
 On `lint-cc`, only the complexity rules count as the rule being satisfied. The reviewer judges splits, extracted helpers, and tables against one bigger function.
 
-`review.md` has one table per rule with plain-hit counts, `% bug` / `% fragile` / `% style` / `% noise`, lint-arm workaround counts, `% better` / `% same` / `% worse` / `% bug`, a net verdict, and two or three examples per side. The net verdict is computed:
+`review.md` has one table per rule with hit counts, `% bug` / `% fragile` / `% style` / `% noise`, workaround counts, `% better` / `% same` / `% worse` / `% bug`, a net verdict, and two or three examples per side. A plain-vs-lint run keeps the old "plain hits" / "Lint-arm" labels. The net verdict is computed:
 
 - earns its place. At least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.
 - costs more than it catches. Lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.
