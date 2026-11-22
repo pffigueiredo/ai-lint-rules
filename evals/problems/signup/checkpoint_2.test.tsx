@@ -151,4 +151,27 @@ describe('functionality', () => {
     await user.click(screen.getByRole('button', { name: 'Hide password' }))
     expect((input as HTMLInputElement).type).toBe('password')
   })
+
+  it('switches the profile between view and edit on back and forward', async () => {
+    stubApi({ profile: PROFILE })
+    window.history.pushState({}, '', '/')
+    window.history.pushState({}, '', '/?mode=edit')
+    renderApp(<App />)
+    expect(await screen.findByRole('region', { name: 'Profile' })).toBeTruthy()
+    expect(screen.getByLabelText('Display name')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+
+    window.history.back()
+    await waitFor(() => {
+      expect(screen.queryAllByLabelText('Display name').some(shown)).toBe(false)
+    })
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Ada' })).toBeTruthy()
+
+    window.history.forward()
+    await waitFor(() => {
+      expect(screen.queryAllByLabelText('Display name').some(shown)).toBe(true)
+    })
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+  })
 })

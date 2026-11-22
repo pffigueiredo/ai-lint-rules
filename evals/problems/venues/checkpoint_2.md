@@ -1,6 +1,6 @@
 # Search, open filter, and sort
 
-The list from before still works. Filters people share live in the URL query string and are restored on load.
+The list from before still works. Filters people share live in the URL query string and are restored on load. Browser back and forward update the search box, the Open now checkbox, the Sort select and the list to match the URL.
 
 ## Search
 

@@ -184,4 +184,33 @@ describe('functionality', () => {
     const names = screen.getAllByRole('button').map(el => el.textContent)
     expect(names).toEqual(['Atlas', 'Harbor', 'Moonlight'])
   })
+
+  it('updates the search box, Open now, Sort, and list on back and forward', async () => {
+    stubList()
+    window.history.pushState({}, '', '/')
+    window.history.pushState({}, '', '/?q=lis&open=1&sort=city')
+    renderApp(<App />)
+    expect(await screen.findByRole('button', { name: 'Moonlight' })).toBeTruthy()
+    expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe('lis')
+    expect((screen.getByLabelText('Open now') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('Sort') as HTMLSelectElement).value).toBe('city')
+    expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+
+    window.history.back()
+    await waitFor(() => {
+      expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe('')
+    })
+    expect((screen.getByLabelText('Open now') as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByLabelText('Sort') as HTMLSelectElement).value).toBe('name')
+    expect(await screen.findByRole('button', { name: 'Harbor' })).toBeTruthy()
+
+    window.history.forward()
+    await waitFor(() => {
+      expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe('lis')
+    })
+    expect((screen.getByLabelText('Open now') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('Sort') as HTMLSelectElement).value).toBe('city')
+    expect(screen.queryByRole('button', { name: 'Harbor' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Moonlight' })).toBeTruthy()
+  })
 })

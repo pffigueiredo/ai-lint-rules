@@ -10,7 +10,7 @@ Show a region named `Profile`. The display name is a heading. The email is text.
 
 ## Mode
 
-Buttons `View` and `Edit`. The mode lives in the URL as `mode=view` or `mode=edit`. Missing `mode` means view.
+Buttons `View` and `Edit`. The mode lives in the URL as `mode=view` or `mode=edit`. Missing `mode` means view. Browser back and forward switch the profile between view and edit to match `mode`.
 
 In view, the profile region has no text boxes.
 
