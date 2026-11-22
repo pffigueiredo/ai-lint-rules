@@ -216,6 +216,9 @@ async function applyLintOverlay(ws: string): Promise<void> {
   const example = await readJson(join(REPO_ROOT, 'oxlint/typescript/oxlintrc.example.json'))
   if (!isRecord(example)) throw new Error('oxlintrc.example.json must be an object')
   example['$schema'] = './node_modules/oxlint/configuration_schema.json'
+  const overrides = Array.isArray(example['overrides']) ? [...example['overrides']] : []
+  overrides.push({ files: ['src/**'], rules: { 'no-console': 'off' } })
+  example['overrides'] = overrides
   await writeJson(join(ws, '.oxlintrc.json'), example)
   await mergeCompilerOptions(join(ws, 'tsconfig.json'))
   const pkg = await readJson(join(ws, 'package.json'))

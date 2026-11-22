@@ -15,7 +15,7 @@
   },
   "overrides": [
     {
-      "files": ["tools/**"],
+      "files": ["tools/**", "scripts/**", "bin/**"],
       "rules": {
         "no-console": "off"
       }

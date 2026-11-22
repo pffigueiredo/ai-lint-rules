@@ -72,7 +72,7 @@ Built-in Oxlint rules. `no-floating-promises` needs `options.typeAware: true` an
 
 | Rule | Blocks |
 | --- | --- |
-| `no-console` | `console.*` in app code. Leave it on in `tools/**`. |
+| `no-console` | `console.*` in app code. Turn it off for `tools/**`, `scripts/**`, and `bin/**`. A CLI package should turn it off for its whole `src`. |
 | `typescript/no-explicit-any` | `any` |
 | `typescript/ban-ts-comment` | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck` |
 | `typescript/consistent-type-assertions` `{ assertionStyle: "never" }` | `as Type`. Use a type predicate, `zod`, or `satisfies` at the boundary. `as const` is still allowed. |

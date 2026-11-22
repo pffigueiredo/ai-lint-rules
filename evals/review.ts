@@ -500,7 +500,11 @@ function overlayFromConfig(cfg: Record<string, unknown>): OverlayRule[] {
       if (
         Array.isArray(files) &&
         files.length > 0 &&
-        files.every(f => typeof f === 'string' && f.startsWith('tools/'))
+        files.every(
+          f =>
+            typeof f === 'string' &&
+            (f.startsWith('tools/') || f.startsWith('scripts/') || f.startsWith('bin/')),
+        )
       ) {
         continue
       }
