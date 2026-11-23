@@ -1,0 +1,245 @@
+[
+  {
+    "name": "base-identity",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1500,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "USD", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 15.00"
+    }]
+  },
+  {
+    "name": "convert-half",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 0.50"
+    }]
+  },
+  {
+    "name": "half-even-two-point-five",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":5,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 0.02"
+    }]
+  },
+  {
+    "name": "half-even-zero-point-five",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 0.00"
+    }]
+  },
+  {
+    "name": "dated-rate-on-or-before",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-10\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5},{\"date\":\"2024-01-12\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":2}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 0.50"
+    }]
+  },
+  {
+    "name": "convert-each-then-sum",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"currency\":\"USD\",\"date\":\"2024-01-01\"},{\"id\":\"2\",\"account\":\"a\",\"amount\":1,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 0.00"
+    }]
+  },
+  {
+    "name": "account-filter-base",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":200,\"currency\":\"USD\",\"date\":\"2024-01-01\"},{\"id\":\"2\",\"account\":\"bob\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--account", "bob", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "bob 0.50"
+    }]
+  },
+  {
+    "name": "missing-rates-file",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "nope.json"],
+      "exitCode": 1,
+      "stdout": ""
+    }]
+  },
+  {
+    "name": "no-matching-rate",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"EUR\",\"to\":\"USD\",\"rate\":2}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 6,
+      "stdout": ""
+    }]
+  },
+  {
+    "name": "base-without-rates",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "USD"],
+      "exitCode": 5,
+      "stdout": "usage: balances --base CODE --rates FILE"
+    }]
+  },
+  {
+    "name": "undated-foreign",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 6,
+      "stdout": ""
+    }]
+  },
+  {
+    "name": "invalid-currency",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"currency\":\"usd\"}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "non-integer-with-currency",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":10.5,\"currency\":\"USD\"}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "uncurrencied-times-hundred",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":15}]",
+      "rates.json": "[]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "USD", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 15.00"
+    }]
+  },
+  {
+    "name": "raw-amount-without-base",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1500,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 1500" }]
+  },
+  {
+    "name": "negative-half-even",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":-3,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a -0.02"
+    }]
+  },
+  {
+    "name": "uncurrencied-half-even",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":0.125}]",
+      "rates.json": "[]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "USD", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 0.12"
+    }]
+  },
+  {
+    "name": "report-with-base",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"zoe\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-05\"},{\"id\":\"2\",\"account\":\"amy\",\"amount\":200,\"currency\":\"USD\",\"date\":\"2024-01-06\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["report", "ledger.json", "--month", "2024-01", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "accounts": { "amy": 1, "zoe": 0.5 }, "total": 1.5 }
+    }]
+  },
+  {
+    "name": "account-before-convert",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\"},{\"id\":\"2\",\"account\":\"bob\",\"amount\":100,\"currency\":\"GBP\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--account", "alice", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "alice 0.50"
+    }]
+  },
+  {
+    "name": "mixed-major-and-minor",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":15},{\"id\":\"2\",\"account\":\"a\",\"amount\":1500,\"currency\":\"USD\",\"date\":\"2024-01-01\"}]",
+      "rates.json": "[]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--base", "USD", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 30.00"
+    }]
+  }
+]

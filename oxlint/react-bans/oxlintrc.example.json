@@ -7,10 +7,10 @@
     "ai/no-use-effect": "error",
     "ai/no-manual-memoization": "error",
     "ai/no-banned-react-reexport": "error",
-    "ai/no-overzealous-destructuring": "error",
     "ai/no-async-state": "error",
     "ai/no-boolean-state": "error",
-    "ai/no-state-copies": "error"
+    "ai/no-state-copies": "error",
+    "ai/url-state-in-lib": "error"
   },
   "overrides": [
     {
@@ -18,6 +18,12 @@
       "rules": {
         "ai/no-use-state": "off",
         "ai/no-use-effect": "off"
+      }
+    },
+    {
+      "files": ["src/lib/**"],
+      "rules": {
+        "ai/url-state-in-lib": "off"
       }
     }
   ]

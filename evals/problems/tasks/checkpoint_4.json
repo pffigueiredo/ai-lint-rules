@@ -1,0 +1,161 @@
+[
+  {
+    "name": "overdue-by-due-date",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "late", "--due", "2024-01-10", "--priority", "1"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "early-high", "--due", "2024-01-05", "--priority", "9"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["add", "early-low", "--due", "2024-01-05", "--priority", "1"], "exitCode": 0, "stdout": "added 3" },
+      {
+        "args": ["overdue", "--today", "2024-01-20"],
+        "exitCode": 0,
+        "stdout": "2 [open] early-high\n3 [open] early-low\n1 [open] late"
+      }
+    ]
+  },
+  {
+    "name": "relative-plus-three-days",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "x", "--due", "+3d", "--today", "2024-01-31"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["overdue", "--today", "2024-02-03"], "exitCode": 0, "stdout": "0 tasks" },
+      { "args": ["overdue", "--today", "2024-02-04"], "exitCode": 0, "stdout": "1 [open] x" }
+    ]
+  },
+  {
+    "name": "relative-plus-two-weeks",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "x", "--due", "+2w", "--today", "2024-02-20"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["overdue", "--today", "2024-03-05"], "exitCode": 0, "stdout": "0 tasks" },
+      { "args": ["overdue", "--today", "2024-03-06"], "exitCode": 0, "stdout": "1 [open] x" }
+    ]
+  },
+  {
+    "name": "overdue-tie-id",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "a", "--due", "2024-01-05", "--priority", "2"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--due", "2024-01-05", "--priority", "2"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["overdue", "--today", "2024-01-06"], "exitCode": 0, "stdout": "1 [open] a\n2 [open] b" }
+    ]
+  },
+  {
+    "name": "done-week-spawns",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "x", "--due", "2024-02-27", "--every", "week"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1\nadded 2" },
+      { "args": ["overdue", "--today", "2024-03-05"], "exitCode": 0, "stdout": "0 tasks" },
+      { "args": ["overdue", "--today", "2024-03-06"], "exitCode": 0, "stdout": "2 [open] x" }
+    ]
+  },
+  {
+    "name": "done-month-keeps-day-thirty-one",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "rent", "--due", "2024-01-31", "--every", "month"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1\nadded 2" },
+      { "args": ["overdue", "--today", "2024-03-01"], "exitCode": 0, "stdout": "2 [open] rent" },
+      { "args": ["done", "2"], "exitCode": 0, "stdout": "done 2\nadded 3" },
+      { "args": ["overdue", "--today", "2024-03-30"], "exitCode": 0, "stdout": "0 tasks" },
+      { "args": ["overdue", "--today", "2024-04-01"], "exitCode": 0, "stdout": "3 [open] rent" }
+    ]
+  },
+  {
+    "name": "relative-without-today",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--due", "+3d"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "overdue-without-today",
+    "group": "error",
+    "steps": [{ "args": ["overdue"], "exitCode": 5, "stdout": "usage: overdue --today YYYY-MM-DD" }]
+  },
+  {
+    "name": "every-without-due",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--every", "week"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "bad-due-february-thirty",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--due", "2024-02-30"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "bad-due-common-feb-twenty-nine",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--due", "2023-02-29"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "overdue-excludes-today",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x", "--due", "2024-01-10"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["overdue", "--today", "2024-01-10"], "exitCode": 0, "stdout": "0 tasks" }
+    ]
+  },
+  {
+    "name": "overdue-excludes-no-due",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["overdue", "--today", "2024-01-10"], "exitCode": 0, "stdout": "0 tasks" }
+    ]
+  },
+  {
+    "name": "two-weeks-common-year",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x", "--due", "+2w", "--today", "2023-02-20"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["overdue", "--today", "2023-03-06"], "exitCode": 0, "stdout": "0 tasks" },
+      { "args": ["overdue", "--today", "2023-03-07"], "exitCode": 0, "stdout": "1 [open] x" }
+    ]
+  },
+  {
+    "name": "undo-recurring-done",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x", "--due", "2024-01-01", "--every", "week"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1\nadded 2" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] x" }
+    ]
+  },
+  {
+    "name": "json-due-only-when-set",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "with", "--due", "2024-06-01"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "without"], "exitCode": 0, "stdout": "added 2" },
+      {
+        "args": ["list", "--json"],
+        "exitCode": 0,
+        "json": [
+          { "id": 1, "title": "with", "status": "open", "priority": 0, "tags": [], "due": "2024-06-01" },
+          { "id": 2, "title": "without", "status": "open", "priority": 0, "tags": [] }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "already-done-does-not-spawn",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x", "--due", "2024-01-01", "--every", "week"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1\nadded 2" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 1\ndone 1" }
+    ]
+  },
+  {
+    "name": "today-invalid-without-due",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--today", "2024-02-30"], "exitCode": 1, "stdout": "" }]
+  },
+  {
+    "name": "today-invalid-with-absolute-due",
+    "group": "error",
+    "steps": [{ "args": ["add", "x", "--due", "2024-01-01", "--today", "2024-02-30"], "exitCode": 1, "stdout": "" }]
+  }
+]

@@ -1,0 +1,229 @@
+[
+  {
+    "name": "block-hides-from-ready",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "blocker"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "blocked"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "1 [open] blocker" }
+    ]
+  },
+  {
+    "name": "done-blocker-unlocks",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "blocker"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "blocked"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "2 [open] blocked" }
+    ]
+  },
+  {
+    "name": "cycle-two-node",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "1", "--on", "2"], "exitCode": 0, "stdout": "blocked 1 on 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 4, "stdout": "cycle" }
+    ]
+  },
+  {
+    "name": "done-refuses-blocked",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["done", "2"], "exitCode": 1, "stdout": "blocked" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] a\n2 [open] b" }
+    ]
+  },
+  {
+    "name": "undo-block",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "1 [open] a\n2 [open] b" }
+    ]
+  },
+  {
+    "name": "cycle-three-node",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["add", "c"], "exitCode": 0, "stdout": "added 3" },
+      { "args": ["block", "1", "--on", "2"], "exitCode": 0, "stdout": "blocked 1 on 2" },
+      { "args": ["block", "2", "--on", "3"], "exitCode": 0, "stdout": "blocked 2 on 3" },
+      { "args": ["block", "3", "--on", "1"], "exitCode": 4, "stdout": "cycle" }
+    ]
+  },
+  {
+    "name": "self-cycle",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["block", "1", "--on", "1"], "exitCode": 4, "stdout": "cycle" }
+    ]
+  },
+  {
+    "name": "block-unknown-id",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["block", "1", "--on", "9"], "exitCode": 1, "stdout": "" }
+    ]
+  },
+  {
+    "name": "block-missing-on",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["block", "1"], "exitCode": 5, "stdout": "usage: block ID --on ID" }
+    ]
+  },
+  {
+    "name": "undo-done-reblocks",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "1 [open] a" },
+      { "args": ["done", "2"], "exitCode": 1, "stdout": "blocked" }
+    ]
+  },
+  {
+    "name": "ready-with-tag",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a", "--tag", "work"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--tag", "home"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["add", "c", "--tag", "work"], "exitCode": 0, "stdout": "added 3" },
+      { "args": ["block", "3", "--on", "1"], "exitCode": 0, "stdout": "blocked 3 on 1" },
+      { "args": ["list", "--ready", "--tag", "work"], "exitCode": 0, "stdout": "1 [open] a" }
+    ]
+  },
+  {
+    "name": "ready-json-blocked-on",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      {
+        "args": ["list", "--json"],
+        "exitCode": 0,
+        "json": [
+          { "id": 1, "title": "a", "status": "open", "priority": 0, "tags": [] },
+          { "id": 2, "title": "b", "status": "open", "priority": 0, "tags": [], "blockedOn": [1] }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "multiple-blockers",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["add", "c"], "exitCode": 0, "stdout": "added 3" },
+      { "args": ["block", "3", "--on", "1"], "exitCode": 0, "stdout": "blocked 3 on 1" },
+      { "args": ["block", "3", "--on", "2"], "exitCode": 0, "stdout": "blocked 3 on 2" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "2 [open] b" },
+      { "args": ["done", "2"], "exitCode": 0, "stdout": "done 2" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "3 [open] c" }
+    ]
+  },
+  {
+    "name": "block-idempotent",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      {
+        "args": ["list", "--json"],
+        "exitCode": 0,
+        "json": [
+          { "id": 1, "title": "a", "status": "open", "priority": 0, "tags": [] },
+          { "id": 2, "title": "b", "status": "open", "priority": 0, "tags": [], "blockedOn": [1] }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "spawn-does-not-copy-blockers",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--due", "2024-01-01", "--every", "week"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["done", "2"], "exitCode": 0, "stdout": "done 2\nadded 3" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "3 [open] b" }
+    ]
+  },
+  {
+    "name": "cycle-does-not-push-undo",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "1", "--on", "2"], "exitCode": 0, "stdout": "blocked 1 on 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 4, "stdout": "cycle" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "1 [open] a\n2 [open] b" }
+    ]
+  },
+  {
+    "name": "blocked-recurring-does-not-spawn",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--due", "2024-01-01", "--every", "week"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["done", "2"], "exitCode": 1, "stdout": "blocked" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 2\ndone 0" }
+    ]
+  },
+  {
+    "name": "blocked-still-overdue",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b", "--due", "2024-01-01"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["block", "2", "--on", "1"], "exitCode": 0, "stdout": "blocked 2 on 1" },
+      { "args": ["overdue", "--today", "2024-01-02"], "exitCode": 0, "stdout": "2 [open] b" },
+      { "args": ["list", "--ready"], "exitCode": 0, "stdout": "1 [open] a" }
+    ]
+  },
+  {
+    "name": "already-done-blocked-still-ok",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":1,\"title\":\"a\",\"status\":\"open\"},{\"id\":2,\"title\":\"b\",\"status\":\"done\",\"blockedOn\":[1]}]}"
+    },
+    "steps": [
+      { "args": ["done", "2"], "exitCode": 0, "stdout": "done 2" }
+    ]
+  },
+  {
+    "name": "missing-blocker-does-not-block",
+    "group": "functionality",
+    "files": {
+      "tasks.json": "{\"tasks\":[{\"id\":2,\"title\":\"b\",\"status\":\"open\",\"blockedOn\":[9]}]}"
+    },
+    "steps": [{ "args": ["list", "--ready"], "exitCode": 0, "stdout": "2 [open] b" }]
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "spec": "A small TypeScript program. Parse a JSON array of { id, amount } rows, reject invalid input, and sum amounts. A React list loads items for an id and shows how many are on.",
+  "cleanFile": "src/ok.ts",
+  "planted": [
+    { "file": "src/narrate.ts", "criterion": "echo_docstrings", "start": 1, "end": 2 },
+    { "file": "src/narrate.ts", "criterion": "entry_exit_logging", "start": 3, "end": 3 },
+    { "file": "src/narrate.ts", "criterion": "narration_comments", "start": 4, "end": 5 },
+    { "file": "src/parse.ts", "criterion": "type_guard_theater", "start": 3, "end": 5 },
+    { "file": "src/parse.ts", "criterion": "unchecked_parse_typing", "start": 8, "end": 8 },
+    { "file": "src/parse.ts", "criterion": "redundant_undefined_checks", "start": 9, "end": 9 },
+    { "file": "src/parse.ts", "criterion": "lenient_parsing", "start": 13, "end": 16 },
+    { "file": "src/race.tsx", "criterion": "state_copy_of_props_or_items", "start": 7, "end": 7 },
+    { "file": "src/race.tsx", "criterion": "manual_async_status", "start": 8, "end": 8 },
+    { "file": "src/race.tsx", "criterion": "stale_response_race", "start": 11, "end": 19 },
+    { "file": "src/race.tsx", "criterion": "effect_for_derived_data", "start": 21, "end": 23 },
+    { "file": "src/once.ts", "criterion": "factory_returns_constant", "start": 7, "end": 9 },
+    { "file": "src/once.ts", "criterion": "single_use_abstraction", "start": 11, "end": 16 },
+    { "file": "src/once.ts", "criterion": "stub_implementations", "start": 19, "end": 21 }
+  ]
+}

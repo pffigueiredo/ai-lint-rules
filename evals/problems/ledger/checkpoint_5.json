@@ -1,0 +1,251 @@
+[
+  {
+    "name": "expand-mid-month-day-twenty",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":10,\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":20}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2024-01-15", "--to", "2024-03-15"],
+      "exitCode": 0,
+      "stdout": "a 20"
+    }]
+  },
+  {
+    "name": "clamp-leap-february",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2024-01-31\",\"every\":\"month\",\"day\":31}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2024-01-31", "--to", "2024-04-30"],
+      "exitCode": 0,
+      "stdout": "a 4"
+    }]
+  },
+  {
+    "name": "clamp-common-february",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2023-01-31\",\"every\":\"month\",\"day\":31}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2023-01-31", "--to", "2023-03-31"],
+      "exitCode": 0,
+      "stdout": "a 3"
+    }]
+  },
+  {
+    "name": "budget-under-limit",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":-10,\"date\":\"2024-01-05\",\"category\":\"food\"}]",
+      "limits.json": "{\"food\":50}"
+    },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "categories": { "food": { "spent": 10, "limit": 50, "ok": true } } }
+    }]
+  },
+  {
+    "name": "budget-over-limit",
+    "group": "core",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":-80,\"date\":\"2024-01-05\",\"category\":\"food\"}]",
+      "limits.json": "{\"food\":50}"
+    },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "categories": { "food": { "spent": 80, "limit": 50, "ok": false } } }
+    }]
+  },
+  {
+    "name": "every-without-day",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2024-01-01\",\"every\":\"month\"}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "budget-missing-limits",
+    "group": "error",
+    "files": { "ledger.json": "[]" },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01"],
+      "exitCode": 5,
+      "stdout": "usage: budget --month YYYY-MM --limits FILE"
+    }]
+  },
+  {
+    "name": "day-zero-invalid",
+    "group": "error",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":0}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 3, "stdout": "" }]
+  },
+  {
+    "name": "limits-not-object",
+    "group": "error",
+    "files": {
+      "ledger.json": "[]",
+      "limits.json": "[]"
+    },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json"],
+      "exitCode": 4,
+      "stdout": ""
+    }]
+  },
+  {
+    "name": "expand-skips-day-before-from",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":10,\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":10}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2024-01-15", "--to", "2024-03-15"],
+      "exitCode": 0,
+      "stdout": "a 20"
+    }]
+  },
+  {
+    "name": "april-day-thirty-one-clamps",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":7,\"date\":\"2024-04-01\",\"every\":\"month\",\"day\":31}]"
+    },
+    "steps": [{
+      "args": ["report", "ledger.json", "--month", "2024-04"],
+      "exitCode": 0,
+      "json": { "month": "2024-04", "accounts": { "a": 7 }, "total": 7 }
+    }]
+  },
+  {
+    "name": "day-twenty-nine-leap-and-common",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2024-02-01\",\"every\":\"month\",\"day\":29}]"
+    },
+    "steps": [
+      {
+        "args": ["report", "ledger.json", "--month", "2024-02"],
+        "exitCode": 0,
+        "json": { "month": "2024-02", "accounts": { "a": 1 }, "total": 1 }
+      },
+      {
+        "args": ["report", "ledger.json", "--month", "2025-02"],
+        "exitCode": 0,
+        "json": { "month": "2025-02", "accounts": { "a": 1 }, "total": 1 }
+      }
+    ]
+  },
+  {
+    "name": "template-skipped-without-window",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":5,\"date\":\"2024-01-01\"},{\"id\":\"2\",\"account\":\"a\",\"amount\":100,\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":1}]"
+    },
+    "steps": [{ "args": ["balances", "ledger.json"], "exitCode": 0, "stdout": "a 5" }]
+  },
+  {
+    "name": "income-does-not-reduce-spend",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":20,\"date\":\"2024-01-05\",\"category\":\"food\"},{\"id\":\"2\",\"account\":\"a\",\"amount\":-10,\"date\":\"2024-01-06\",\"category\":\"food\"}]",
+      "limits.json": "{\"food\":50}"
+    },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "categories": { "food": { "spent": 10, "limit": 50, "ok": true } } }
+    }]
+  },
+  {
+    "name": "recurring-converted-budget",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":-100,\"currency\":\"USD\",\"date\":\"2024-01-15\",\"every\":\"month\",\"day\":15,\"category\":\"food\"}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]",
+      "limits.json": "{\"food\":1}"
+    },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "categories": { "food": { "spent": 0.5, "limit": 1, "ok": true } } }
+    }]
+  },
+  {
+    "name": "firing-uses-occurrence-rate",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":15}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5},{\"date\":\"2024-02-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":2}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2024-01-01", "--to", "2024-02-28", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "a 2.50"
+    }]
+  },
+  {
+    "name": "century-common-year",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"1900-01-31\",\"every\":\"month\",\"day\":31}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "1900-01-31", "--to", "1900-03-31"],
+      "exitCode": 0,
+      "stdout": "a 3"
+    }]
+  },
+  {
+    "name": "other-account-template-ignored",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"alice\",\"amount\":100,\"currency\":\"USD\",\"date\":\"2024-01-15\"},{\"id\":\"2\",\"account\":\"bob\",\"amount\":100,\"currency\":\"GBP\",\"date\":\"2024-01-01\",\"every\":\"month\",\"day\":1}]",
+      "rates.json": "[{\"date\":\"2024-01-01\",\"from\":\"USD\",\"to\":\"EUR\",\"rate\":0.5}]"
+    },
+    "steps": [{
+      "args": ["balances", "ledger.json", "--from", "2024-01-01", "--to", "2024-01-31", "--account", "alice", "--base", "EUR", "--rates", "rates.json"],
+      "exitCode": 0,
+      "stdout": "alice 0.50"
+    }]
+  },
+  {
+    "name": "spend-equal-limit",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":-10,\"date\":\"2024-01-05\",\"category\":\"food\"}]",
+      "limits.json": "{\"food\":10}"
+    },
+    "steps": [{
+      "args": ["budget", "ledger.json", "--month", "2024-01", "--limits", "limits.json"],
+      "exitCode": 0,
+      "json": { "month": "2024-01", "categories": { "food": { "spent": 10, "limit": 10, "ok": true } } }
+    }]
+  },
+  {
+    "name": "template-date-is-start",
+    "group": "functionality",
+    "files": {
+      "ledger.json": "[{\"id\":\"1\",\"account\":\"a\",\"amount\":1,\"date\":\"2024-03-01\",\"every\":\"month\",\"day\":15}]"
+    },
+    "steps": [
+      {
+        "args": ["report", "ledger.json", "--month", "2024-01"],
+        "exitCode": 0,
+        "json": { "month": "2024-01", "accounts": {}, "total": 0 }
+      },
+      {
+        "args": ["report", "ledger.json", "--month", "2024-03"],
+        "exitCode": 0,
+        "json": { "month": "2024-03", "accounts": { "a": 1 }, "total": 1 }
+      }
+    ]
+  }
+]

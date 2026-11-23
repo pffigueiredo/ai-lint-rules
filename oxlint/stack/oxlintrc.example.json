@@ -26,10 +26,10 @@
     "ai/no-use-effect": "error",
     "ai/no-manual-memoization": "error",
     "ai/no-banned-react-reexport": "error",
-    "ai/no-overzealous-destructuring": "error",
     "ai/no-async-state": "error",
     "ai/no-boolean-state": "error",
     "ai/no-state-copies": "error",
+    "ai/url-state-in-lib": "error",
     "better-tailwindcss/enforce-canonical-classes": "error",
     "better-tailwindcss/no-unnecessary-whitespace": "error",
     "better-tailwindcss/no-restricted-classes": [
@@ -69,7 +69,13 @@
       }
     },
     {
-      "files": ["tools/**"],
+      "files": ["src/lib/**"],
+      "rules": {
+        "ai/url-state-in-lib": "off"
+      }
+    },
+    {
+      "files": ["tools/**", "scripts/**", "bin/**"],
       "rules": {
         "no-console": "off"
       }

@@ -8,7 +8,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 
 ## Layout
 
-- `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: five hook bans and three state rules
+- `oxlint/react-bans` — eight Oxlint JS-plugin rules, with tests: four hook bans, one URL rule, and three state rules
 - `oxlint/typescript` — `any`, `@ts-*`, `as` casts, `!` assertions, `console`, floating promises
 - `tsconfig/strict.json` — the strict compiler flags that pair with those rules
 - `oxlint/react-effects` — Compiler `set-state-in-effect` plus You Might Not Need An Effect
@@ -17,6 +17,7 @@ The React bans started as the local Oxlint plugins in [KATTCORP/isbabyoutyet](ht
 - `konsistent/konsistent.json` — [konsistent](https://www.npmjs.com/package/konsistent) convention that every page route sets its meta
 - `oxlint/stack` — all the Oxlint configs above in one `.oxlintrc.json`
 - `oracles` — runnable property and oracle tests with [fast-check](https://fast-check.dev), and how to write them
+- `evals` hold CLI and React problems that measure whether the TypeScript and React rules change what an agent writes
 
 Needs `oxlint` and `@oxlint/plugins` at matching versions. The copies here were taken from `1.83.0`. Floating promises also need `oxlint-tsgolint`.
 
@@ -38,9 +39,9 @@ Oxlint loads JavaScript plugins through `jsPlugins`. Drop `oxlint/react-bans` in
 | `ai/no-use-effect` | `useEffect`, `useLayoutEffect` |
 | `ai/no-manual-memoization` | `useMemo`, `useCallback` (React Compiler owns this) |
 | `ai/no-banned-react-reexport` | Re-exporting the banned hooks through a local barrel |
-| `ai/no-overzealous-destructuring` | Destructuring a field used fewer than three times |
+| `ai/url-state-in-lib` | `window.location`, `document.location`, `globalThis.location`, the unshadowed global `location`, and `history.pushState` / `replaceState` / `back` / `forward` / `go` (bare `history` and `window.history`) outside `src/lib/**`. Does not flag `URL` or `URLSearchParams`. |
 
-Shareable UI state goes in the URL. Derived state comes from queries or mutations. Effects and subscriptions live behind audited `src/lib/use-*.ts` hooks. The example config turns the state and effect rules off for that glob.
+Shareable UI state goes in the URL. Derived state comes from queries or mutations. Effects and subscriptions live behind audited `src/lib/use-*.ts` hooks. The example config turns the state and effect rules off for `src/lib/use-*`, and `ai/url-state-in-lib` off for `src/lib/**`. Call a `src/lib/use-*` hook that reads with `useSyncExternalStore` and subscribes to `popstate`.
 
 ## State rules
 
@@ -70,7 +71,7 @@ Built-in Oxlint rules. `no-floating-promises` needs `options.typeAware: true` an
 
 | Rule | Blocks |
 | --- | --- |
-| `no-console` | `console.*` in app code. Leave it on in `tools/**`. |
+| `no-console` | `console.*` in app code. Turn it off for `tools/**`, `scripts/**`, and `bin/**`. A CLI package should turn it off for its whole `src`. |
 | `typescript/no-explicit-any` | `any` |
 | `typescript/ban-ts-comment` | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck` |
 | `typescript/consistent-type-assertions` `{ assertionStyle: "never" }` | `as Type`. Use a type predicate, `zod`, or `satisfies` at the boundary. `as const` is still allowed. |
@@ -184,3 +185,84 @@ They fit logic with a rule you can state: "never overlap", "exactly once", "same
 | `no-restricted-classes` | Bans arbitrary type, tracking, leading, shadow, and radius. Also bans spacing on `.25` / `.75` steps so the scale stays on a 2px grid |
 
 The restrict patterns in `oxlint/tailwind-theme/oxlintrc.example.json` assume named tokens in `@theme`. Change the messages to match the tokens you actually ship.
+
+## Evals
+
+`evals/` asks whether this repo's rules change what an agent writes. One model implements a problem across checkpoints in one or more arms. `plain` is the template with no overlay. `lint` plants this repo's overlay. On React it drops `ai/url-state-in-lib`, which the example configs enable, so a later arm can measure that rule alone. `lint-cc` is exactly that overlay plus `eslint/complexity` max 20 and `oxlint-plugin-complexity` cognitive complexity max 15. `lint-v2` is the overlay plus type-aware `no-unsafe-*` and `no-misused-promises`, a planted `src/reset.d.ts` that imports `@total-typescript/ts-reset`, CLI drops of `no-console` and `no-non-null-assertion`, and React drops of `no-async-state`, `no-boolean-state`, and `no-use-state`, replaced by `ai/url-state-in-lib`. `lint-url` is the overlay plus `ai/url-state-in-lib` on React only. Those deltas live on the arms table in `evals/lib.ts`. The agent sees them as extra or fewer rules in `.oxlintrc.json`. The arm name never appears in a workspace path or planted file. Function caps do not cover module-level code. The grader's `(module)` pseudo-function measures whether an agent moved logic to module scope to dodge the cap.
+
+CLI problems (`ledger`, `tasks`) start from `evals/template`. The lint overlay is `oxlint/typescript` plus `tsconfig/strict.json`. Hidden checks run `src/cli.ts` against JSON cases.
+
+React problems (`venues`, `signup`) start from `evals/template-react` (Vite, React 19, React Compiler, TanStack Query in both arms). The lint overlay is `oxlint/stack` minus Tailwind: the `ai/*` bans, `react/set-state-in-effect`, `react-you-might-not-need-an-effect/*`, architecture `no-restricted-imports`, and the TypeScript rules, plus `tsconfig/strict.json`. Hidden checks are vitest files that render the default export of `src/App.tsx` and stub `fetch`.
+
+Hidden checks grade correctness. Outcome metrics (solved rates, complexity, size, cost) can move either way. Compliance metrics (lint hits, `tsc` errors, suppressions, whether `pnpm check` ran) only show that the lint arm followed the rules. The per-rule table includes `ai/*`, `react/*`, `react-you-might-not-need-an-effect/*`, and `no-restricted-imports`.
+
+```sh
+node evals/run.ts --problem ledger --arm plain --arm lint --reps 1 --model cursor-grok-4.6-high
+node evals/grade.ts evals/runs/<timestamp>
+node evals/grade.ts evals/runs/<timestamp> --baseline lint
+```
+
+Pass `--problem venues` or `--problem signup` for a React problem, `--problem tasks` for the other CLI problem, `--checkpoints K` to stop early, and `--out evals/runs/<dir>` to resume. Bundles land in `evals/runs/<timestamp>/`. `--timeout-min` (default 20) kills a session that runs too long. `--stall-min` (default 6) kills a session that prints no stdout for that many minutes and records `stalled`. The runner starts `cursor-agent` in its own process group and kills the group when the session ends, times out, or stalls, so leftover Vite or browser processes do not hold ports.
+
+`summary.md` opens with a head-to-head table, one row per outcome metric. The baseline arm is `--baseline` (default `plain` if that arm is in the run, otherwise the first arm in the manifest). Each other arm gets its own table against that baseline, with delta (other minus baseline) and `overlap`. Overlap is yes when the two min-max ranges overlap, so that delta is noise. Two-arm plain vs lint output matches the old headings. The same table is repeated per checkpoint, because a gap that only appears later is the result that matters. Unused files, unused exports, and unused dependencies from knip are in that outcome table. Neither arm's rules target those. Failed, timed-out, or stalled agent calls are listed and still counted in the rates. Then compliance, then lint hits per rule. When `lint-cc` is in the run, a Complexity caps section lists per-workspace `ccMax`, `(module)` complexity, and statements.
+
+Solved means every check of that checkpoint passed, including earlier checkpoints as regression. Iso-solved means the new checks passed even if regression failed.
+
+```sh
+node evals/grade.ts --self-check
+```
+
+That checks that each reference solution passes every hidden check and `pnpm check` under the lint arm. An empty `src/cli.ts` or an `App` that returns null fails every check. `pnpm typecheck` includes `evals/`.
+
+Hidden JSON cases do not try long command sequences. `node evals/verify.ts --self-check` drives the tasks CLI with fast-check sequences and checks spec-stated state-machine properties. `node evals/verify.ts <runDir>` scores `tasks-*` snapshots at a checkpoint against the same baseline rule and writes `properties.jsonl` plus `properties.md`. See `.cursor/skills/verify-tasks-state-machine/SKILL.md`.
+
+After `grade.ts`, score slop with an LLM judge. Grade must have written `results.jsonl` first, because flag rates are per 100 statements.
+
+```sh
+node evals/judge.ts evals/runs/<timestamp>
+node evals/judge.ts evals/runs/<timestamp> --baseline lint
+```
+
+The default judge model is `gpt-5.6-sol-high`. It must not be grok, because the candidate is grok. Pass `--model` to change it and `--concurrency` (default 4) for parallel snapshots. The judge sees only `src/**` and the specs. It never sees the arm, the candidate model, or configs. Rerun the same command to resume. Snapshots already in `judge.jsonl` are skipped.
+
+`evals/rubric.jsonl` is adapted from [SlopCodeBench](https://github.com/SprocketLab/slop-code-bench) (MIT). Language-neutral criteria stay. Python examples are TypeScript. Criteria that cannot occur in a small TS CLI or React app are dropped. Local criteria cover slop these rules cannot see, and React patterns the overlay already bans. Each criterion has `source` (`scbench` or `local`) and `rule`: the overlay rule ids that already ban that slop, or `null`. `slop.md` reports flags per 100 statements twice. The second row drops criteria whose `rule` is set, because the lint arm wins those by construction.
+
+`slop.md` uses the same head-to-head table as `summary.md`, baseline vs each other arm. Read overlap the same way. It also lists new flags per checkpoint, counts by category, and pairwise preference. Pairwise shows both final `src/**` trees as Project A and Project B, in both orders, for the baseline vs each other arm. A win counts only when both orders agree. Disagreement is a tie. The qualitative section quotes flagged snippets so you can see what the judge meant.
+
+Review each overlay rule as a senior reviewer would:
+
+```sh
+node evals/judge.ts --review evals/runs/<timestamp>
+```
+
+That reuses the judge model (default `gpt-5.6-sol-high`, never grok), blinding, resume, and `--concurrency`. Pass `--checkpoint N` to review that checkpoint instead of the final one. `--fresh` archives `review.jsonl` and `review.md`.
+
+The yardstick is the union of every arm's rules. A rule's benefit side reviews its hits in arms that do not enforce it. Its cost side reviews workarounds in arms that do. On a plain-vs-lint run that is the old split: every yardstick hit on plain, workarounds on lint. Dropped lint-v2 rules are reviewed as hits in lint-v2 code. Added lint-v2 rules are reviewed as workarounds in lint-v2 code and as hits in lint code. On a lint-vs-lint-url run, `ai/url-state-in-lib` hits in lint code are the benefit side and workarounds in lint-url code are the cost side.
+
+The reviewer sees about 20 lines of context, the whole file, the rule, and the specs. Benefit verdicts are `bug`, `fragile`, `style`, or `noise`. A `bug` must name an input a person can run. Cost verdicts are `better`, `same`, `worse`, or `bug`. Prompts list overlay rules and their messages from the repo configs and `oxlint/react-bans`, not the arm name.
+
+On `lint-cc`, only the complexity rules count as the rule being satisfied. The reviewer judges splits, extracted helpers, and tables against one bigger function.
+
+`review.md` has one table per rule with hit counts, `% bug` / `% fragile` / `% style` / `% noise`, workaround counts, `% better` / `% same` / `% worse` / `% bug`, a net verdict, and two or three examples per side. A plain-vs-lint run keeps the old "plain hits" / "Lint-arm" labels. The net verdict is computed:
+
+- earns its place. At least one plain-arm `bug` or `fragile`, they are at least 15% of plain hits, and at most 25% of lint-arm workarounds are `worse` or `bug`. No workarounds counts as 0% harm.
+- costs more than it catches. Lint-arm `worse`+`bug` outnumber plain-arm `bug`+`fragile`, or every plain hit is `style` or `noise` and there are no workarounds.
+- neutral. Anything else.
+
+`review.jsonl` holds every verdict. Rerun the same command to resume. Snapshots and hits already in the file are skipped.
+
+Score candidate checks that neither arm enforced, on the same frozen snapshots, without new agent runs:
+
+```sh
+node evals/sweep.ts evals/runs/<timestamp>
+node evals/sweep.ts evals/runs/<timestamp> --baseline lint
+```
+
+That writes `sweep.jsonl` (one row per workspace, checkpoint, and check), reviews up to 10 product hits per check per arm with the same benefit prompt as `--review` (default `gpt-5.6-sol-high`, never grok), replays CLI `bug` inputs, and writes `sweep.md`. Pass `--no-review` to skip the LLM. `node evals/sweep.ts --self-check` plants one known hit per check.
+
+```sh
+node evals/judge.ts --self-check
+```
+
+That runs the judge twice on planted slop in `evals/judge-fixture/` and prints recall, clean-file flags, and run-to-run agreement. It also checks the review parsers, overlay-rule catalog, and net-verdict rule.
+

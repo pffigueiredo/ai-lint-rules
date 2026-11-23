@@ -1,0 +1,126 @@
+[
+  {
+    "name": "undo-add",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "keep"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "drop"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] keep" }
+    ]
+  },
+  {
+    "name": "undo-done",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] x" }
+    ]
+  },
+  {
+    "name": "stats-mixed",
+    "group": "core",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 1\ndone 1" }
+    ]
+  },
+  {
+    "name": "stats-empty",
+    "group": "core",
+    "steps": [{ "args": ["stats"], "exitCode": 0, "stdout": "open 0\ndone 0" }]
+  },
+  {
+    "name": "undo-empty",
+    "group": "error",
+    "steps": [{ "args": ["undo"], "exitCode": 1, "stdout": "nothing to undo" }]
+  },
+  {
+    "name": "undo-twice-then-empty",
+    "group": "error",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["undo"], "exitCode": 1, "stdout": "nothing to undo" }
+    ]
+  },
+  {
+    "name": "unknown-command",
+    "group": "error",
+    "steps": [{ "args": ["nope"], "exitCode": 5, "stdout": "usage: add|list|done|undo|stats" }]
+  },
+  {
+    "name": "list-does-not-undo",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [open] x" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "0 tasks" }
+    ]
+  },
+  {
+    "name": "undo-add-reuses-id",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["add", "y"], "exitCode": 0, "stdout": "added 1" }
+    ]
+  },
+  {
+    "name": "stats-after-undo",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "a"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["add", "b"], "exitCode": 0, "stdout": "added 2" },
+      { "args": ["done", "2"], "exitCode": 0, "stdout": "done 2" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 2\ndone 0" }
+    ]
+  },
+  {
+    "name": "failed-done-does-not-undo",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "9"], "exitCode": 1, "stdout": "" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "0 tasks" }
+    ]
+  },
+  {
+    "name": "undo-then-stats-empty",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 0\ndone 0" }
+    ]
+  },
+  {
+    "name": "already-done-undo-stays-done",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["done", "1"], "exitCode": 0, "stdout": "done 1" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "1 [done] x" }
+    ]
+  },
+  {
+    "name": "stats-does-not-undo",
+    "group": "functionality",
+    "steps": [
+      { "args": ["add", "x"], "exitCode": 0, "stdout": "added 1" },
+      { "args": ["stats"], "exitCode": 0, "stdout": "open 1\ndone 0" },
+      { "args": ["undo"], "exitCode": 0, "stdout": "undone" },
+      { "args": ["list"], "exitCode": 0, "stdout": "0 tasks" }
+    ]
+  }
+]
