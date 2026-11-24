@@ -20,6 +20,7 @@ import {
   repoDevDeps,
   walkSource,
   withComplexityYardstick,
+  withoutLeakingOverrides,
   writeJson,
 } from './lib.ts'
 
@@ -96,6 +97,7 @@ async function applyLintOverlay(ws: string): Promise<void> {
   await copyReactBans(join(ws, 'react-bans'))
   const cfg = stackMinusTailwind(example, './react-bans/plugin.js')
   cfg['$schema'] = './node_modules/oxlint/configuration_schema.json'
+  withoutLeakingOverrides(cfg)
   const ignoreRaw = cfg['ignorePatterns']
   const ignore = Array.isArray(ignoreRaw) ? ignoreRaw.filter(p => typeof p === 'string') : []
   if (!ignore.includes('react-bans/**')) ignore.push('react-bans/**')
