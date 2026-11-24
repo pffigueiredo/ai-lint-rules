@@ -461,6 +461,15 @@ export function findLeak(text: string): string | undefined {
   return token
 }
 
+// A planted config must pass the blinding check, so overrides whose globs name test files stay out of agent workspaces; an agent's own *.test.* files there get the app-code rules.
+export function withoutLeakingOverrides(cfg: Record<string, unknown>): void {
+  const overrides = cfg['overrides']
+  if (!Array.isArray(overrides)) return
+  cfg['overrides'] = overrides.filter(
+    o => !(isRecord(o) && Array.isArray(o['files']) && o['files'].some(f => typeof f === 'string' && findLeak(f) !== undefined)),
+  )
+}
+
 export function parseManifest(raw: unknown): Manifest {
   if (!isRecord(raw) || !Array.isArray(raw['workspaces'])) throw new Error('manifest.json: missing workspaces')
   const workspaces: WorkspaceRow[] = []
