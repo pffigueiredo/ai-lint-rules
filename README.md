@@ -67,7 +67,7 @@ These overlap with existing rules, deliberately:
 
 ## TypeScript and console
 
-Built-in Oxlint rules. `no-floating-promises` needs `options.typeAware: true` and the `oxlint-tsgolint` package.
+Built-in Oxlint rules. `no-floating-promises`, `no-misused-promises`, and the `no-unsafe-*` rules need `options.typeAware: true` and the `oxlint-tsgolint` package.
 
 | Rule | Blocks |
 | --- | --- |
@@ -77,6 +77,10 @@ Built-in Oxlint rules. `no-floating-promises` needs `options.typeAware: true` an
 | `typescript/consistent-type-assertions` `{ assertionStyle: "never" }` | `as Type`. Use a type predicate, `zod`, or `satisfies` at the boundary. `as const` is still allowed. |
 | `typescript/no-non-null-assertion` | `x!`. With `as` banned, `!` is the last cheap way to silence a type error. No exceptions, tests and scripts included. |
 | `typescript/no-floating-promises` | A Promise that is not `await`ed, `return`ed, `.catch`ed, or `void`ed. Intentional fire-and-forget (TanStack `navigate()` in a click handler) is `void navigate(...)`. |
+| `typescript/no-misused-promises` | A Promise where a `void` callback or a condition is expected: `onClick={save}` when `save` is async, `if (loadUser())`. A rejection there is never caught. Pass `() => void save()` and catch inside `save`. |
+| `typescript/no-unsafe-assignment`, `no-unsafe-member-access`, `no-unsafe-call`, `no-unsafe-argument`, `no-unsafe-return` | An `any` flowing into typed code without a check: `const venue: Venue = await res.json()`, `JSON.parse(raw).tasks`. `res.json()` and `JSON.parse` return `any`, so the `as` ban never sees them. Parse into `unknown` and narrow at the boundary. Off in `*.test.*`, `*.spec.*`, and `__tests__/`, where asserting on parsed JSON is the point. |
+
+In the evals, about half of the `no-unsafe-*` hits in agent code written under the rest of this stack were unvalidated JSON from `res.json()`, and `no-misused-promises` caught an async Save handler whose rejection never showed its error.
 
 Type-aware mode also turns on the rest of tsgolint correctness. This stack leaves two of those off because they were noise on a React Compiler app of object methods and `FormData` values:
 
